@@ -9,22 +9,101 @@ output: html_document
 knitr::opts_chunk$set(echo = TRUE)
 ```
 
-## R Markdown
-
-This is an R Markdown document. Markdown is a simple formatting syntax for authoring HTML, PDF, and MS Word documents. For more details on using R Markdown see <http://rmarkdown.rstudio.com>.
-
-When you click the **Knit** button a document will be generated that includes both content as well as the output of any embedded R code chunks within the document. You can embed an R code chunk like this:
-
-```{r cars}
-summary(cars)
+```{r}
+library(tidyverse)
+library(sf)
+library(units)
 ```
 
-## Including Plots
-
-You can also embed plots, for example:
-
-```{r pressure, echo=FALSE}
-plot(pressure)
+```{r}
+neighbourhoods_url = "data/neighbourhoods-09-2022.geojson"
+berlin <- st_read(neighbourhoods_url) %>%
+  drop_na(c("neighbourhood", "neighbourhood_group"))
+berlin
 ```
 
-Note that the `echo = FALSE` parameter was added to the code chunk to prevent printing of the R code that generated the plot.
+```{r}
+ggplot() +
+  geom_sf(data=berlin)
+```
+
+```{r}
+listings_url <- "data/listings-09-2022.csv"
+listings_raw <-read_csv(listings_url)
+listings_grouped_by_neighbourhood <- listings_raw %>%
+  group_by(neighbourhood_cleansed) %>%
+  summarise(count=n()) %>%
+  mutate(neighbourhood = neighbourhood_cleansed)
+listings_grouped_by_neighbourhood
+neighbourhood_counts <- listings_grouped_by_neighbourhood %>%
+  inner_join(berlin, by="neighbourhood") %>%
+  st_as_sf()
+neighbourhood_counts
+neighbourhood_counts %>%
+  ggplot() +
+  geom_sf(aes(fill = count), color = "white", size = 0.2) +
+  scale_fill_viridis_c()
+```
+```{r}
+neighbourhood_counts %>%
+  mutate(count_bin = ntile(x=count, n=5)) %>%
+  ggplot() +
+  geom_sf(aes(fill = count_bin), color = "white", size = 0.2) +
+  scale_fill_viridis_c()
+```
+
+
+
+```{r}
+sf_use_s2(FALSE)
+neighbourhoods_with_area <- berlin %>%
+  mutate(area = st_area(geometry))
+neighbourhood_with_accomodations_per_area <- listings_grouped_by_neighbourhood %>%
+  inner_join(neighbourhoods_with_area, by="neighbourhood") %>%
+  st_as_sf() %>%
+  mutate(count_per_area = count / drop_units(area))
+neighbourhood_with_accomodations_per_area %>%
+  mutate(count_per_area_bin = ntile(x=count_per_area, n=5)) %>%
+  ggplot() +
+  geom_sf(aes(fill = count_per_area_bin), color = "white", size = 0.2) +
+  scale_fill_viridis_c()
+```
+
+```{r}
+calendar_url <- "data/calendar-09-2022.csv"
+calendar_raw <-read_csv(calendar_url) %>%
+  mutate(across(`price`:`adjusted_price`, str_remove, "[$]")) %>%
+  mutate(across(`price`:`adjusted_price`, as.double))
+calendar_raw
+```
+
+Removal of comma is necessary because prices above \$1000 use commas to group the digits (e. g. \$1,000)
+
+```{r}
+neighbourhoods_with_avg_price <- listings_raw %>%
+  mutate(price = str_remove_all(price, "[$,]")) %>%
+  mutate(price = as.double(price)) %>%
+  group_by(neighbourhood_cleansed) %>%
+  summarise(avg_price_per_neighbourhood = mean(price)) %>%
+  mutate(neighbourhood = neighbourhood_cleansed) %>%
+  inner_join(berlin, by="neighbourhood") %>%
+  st_as_sf()
+
+neighbourhoods_with_avg_price 
+
+neighbourhoods_with_avg_price %>%
+  ggplot() +
+  geom_sf(aes(fill = avg_price_per_neighbourhood), color = "white", size = 0.2) +
+  scale_fill_viridis_c()
+```
+
+```{r}
+neighbourhoods_with_avg_price %>%
+  mutate(avg_price_bin = ntile(x=avg_price_per_neighbourhood, n=5)) %>%
+  ggplot() +
+  geom_sf(aes(fill = avg_price_bin), color = "white", size = 0.2) +
+  scale_fill_viridis_c()
+```
+
+Why are Marzahn-Süd, Wartenberg and Haselhorst on average so expensive?
+
