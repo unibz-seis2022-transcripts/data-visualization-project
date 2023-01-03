@@ -5,6 +5,12 @@ date: "`r Sys.Date()`"
 output: html_document
 ---
 
+# What are $metrics per district?
+
+# If the host is not living in Berlin, how does this affect the number of offered accommodations/price/rating/...?
+
+# If a guest submitted multiple reviews, what can we learn about their behaviorr?
+
 ```{r setup, include=FALSE}
 knitr::opts_chunk$set(echo = TRUE)
 ```
@@ -16,57 +22,88 @@ library(units)
 ```
 
 ```{r}
+sf_use_s2(FALSE)
 neighbourhoods_url = "data/neighbourhoods-09-2022.geojson"
-berlin <- st_read(neighbourhoods_url) %>%
+berlin_neighbourhoods <- st_read(neighbourhoods_url) %>%
   drop_na(c("neighbourhood", "neighbourhood_group"))
-berlin
-```
 
-```{r}
-ggplot() +
-  geom_sf(data=berlin)
+berlin_neighbourhood_groups <- berlin_neighbourhoods %>%
+  mutate(neighbourhood = neighbourhood_group) %>%
+  group_by(neighbourhood_group) %>%
+  summarise(geometry = st_union(geometry))
 ```
 
 ```{r}
 listings_url <- "data/listings-09-2022.csv"
 listings_raw <-read_csv(listings_url)
-listings_grouped_by_neighbourhood <- listings_raw %>%
-  group_by(neighbourhood_cleansed) %>%
-  summarise(count=n()) %>%
-  mutate(neighbourhood = neighbourhood_cleansed)
-listings_grouped_by_neighbourhood
-neighbourhood_counts <- listings_grouped_by_neighbourhood %>%
-  inner_join(berlin, by="neighbourhood") %>%
+listings_price_cleaned <- listings_raw %>%
+  mutate(neighbourhood=neighbourhood_cleansed) %>%
+  mutate(neighbourhood_group=neighbourhood_group_cleansed) %>%
+  mutate(price = str_remove_all(price, "[$,]")) %>%
+  mutate(price = as.double(price))
+```
+
+
+```{r}
+summarise_listings_by_neighbourhood <- function(listings) {
+  listings %>%
+    group_by(neighbourhood) %>%
+    summarise(
+      count_listings=n(),
+      count_reviews=sum(number_of_reviews), 
+      avg_price = mean(price), 
+      median_price = median(price)
+    )
+}
+
+listings_grouped_by_neighbourhood <- summarise_listings_by_neighbourhood(listings_price_cleaned)
+```
+
+```{r}
+neighbourhoods_aggregated <- listings_grouped_by_neighbourhood %>%
+  inner_join(berlin_neighbourhoods, by= "neighbourhood") %>%
   st_as_sf()
-neighbourhood_counts
-neighbourhood_counts %>%
+neighbourhoods_aggregated %>%
   ggplot() +
-  geom_sf(aes(fill = count), color = "white", size = 0.2) +
-  scale_fill_viridis_c()
-```
-```{r}
-neighbourhood_counts %>%
-  mutate(count_bin = ntile(x=count, n=5)) %>%
-  ggplot() +
-  geom_sf(aes(fill = count_bin), color = "white", size = 0.2) +
+  geom_sf(aes(fill = count_listings), color = "white", size = 0.2) +
   scale_fill_viridis_c()
 ```
 
+Observations: Neighbourhood "Alexanderplatz" is very big and therefore has a lot of accommodations
+
+```{r}
+neighbourhoods_aggregated %>%
+  mutate(count_listings_bin = ntile(x=count_listings, n=5)) %>%
+  ggplot() +
+  geom_sf(aes(fill = count_listings_bin), color = "white", size = 0.2) +
+  scale_fill_viridis_c()
+```
 
 
 ```{r}
-sf_use_s2(FALSE)
-neighbourhoods_with_area <- berlin %>%
+neighbourhoods_with_area <- berlin_neighbourhoods %>%
   mutate(area = st_area(geometry))
-neighbourhood_with_accomodations_per_area <- listings_grouped_by_neighbourhood %>%
+neighbourhood_with_listings_per_area <- listings_grouped_by_neighbourhood %>%
   inner_join(neighbourhoods_with_area, by="neighbourhood") %>%
   st_as_sf() %>%
-  mutate(count_per_area = count / drop_units(area))
-neighbourhood_with_accomodations_per_area %>%
-  mutate(count_per_area_bin = ntile(x=count_per_area, n=5)) %>%
+  mutate(count_listings_per_area = count_listings / drop_units(area))
+neighbourhood_with_listings_per_area %>%
   ggplot() +
-  geom_sf(aes(fill = count_per_area_bin), color = "white", size = 0.2) +
+  geom_sf(aes(fill = count_listings_per_area), color = "white", size = 0.2) +
   scale_fill_viridis_c()
+```
+
+
+```{r}
+neighbourhood_with_listings_per_area_binned <- neighbourhood_with_listings_per_area %>%
+  mutate(count_listings_per_area_bin = ntile(x=count_listings_per_area, n=3)) %>%
+  mutate(bin_label = quantile(count_listings_per_area, probs = c(count_listings_per_area_bin/3)))
+
+neighbourhood_with_listings_per_area_binned %>%
+  mutate(count_listings_per_area_bin = as.character(count_listings_per_area_bin)) %>%
+  ggplot() +
+  geom_sf(aes(fill = count_listings_per_area_bin), color = "white", size = 0.2) +
+  scale_fill_viridis_d()
 ```
 
 ```{r}
@@ -80,30 +117,296 @@ calendar_raw
 Removal of comma is necessary because prices above \$1000 use commas to group the digits (e. g. \$1,000)
 
 ```{r}
-neighbourhoods_with_avg_price <- listings_raw %>%
-  mutate(price = str_remove_all(price, "[$,]")) %>%
-  mutate(price = as.double(price)) %>%
-  group_by(neighbourhood_cleansed) %>%
-  summarise(avg_price_per_neighbourhood = mean(price)) %>%
-  mutate(neighbourhood = neighbourhood_cleansed) %>%
-  inner_join(berlin, by="neighbourhood") %>%
-  st_as_sf()
-
-neighbourhoods_with_avg_price 
-
-neighbourhoods_with_avg_price %>%
+neighbourhoods_aggregated %>%
   ggplot() +
-  geom_sf(aes(fill = avg_price_per_neighbourhood), color = "white", size = 0.2) +
+  geom_sf(aes(fill = median_price), color = "darkgrey", size = 0.2) +
+  scale_fill_viridis_c()
+```
+
+
+```{r}
+neighbourhoods_aggregated %>%
+  ggplot() +
+  geom_sf(aes(fill = avg_price), color = "darkgrey", size = 0.2) +
+  scale_fill_viridis_c()
+```
+
+Interesting observations: Surprisingly Marzahn-Süd has a high average price, but also other areas like Marzahn-Nord, Rummelsburg and Haselhorst. Let's use ntile binning for better comparability
+
+```{r}
+neighbourhoods_top_5_avg_price <- neighbourhoods_aggregated %>%
+  top_n(5, avg_price) %>%
+  select(c("neighbourhood", "neighbourhood_group", "avg_price")) %>%
+  mutate(is_expensive = TRUE) %>%
+  st_drop_geometry()
+neighbourhoods_top_5_avg_price
+```
+
+```{r}
+neighbourhoods_aggregated %>%
+  left_join(neighbourhoods_top_5_avg_price, by = "neighbourhood") %>%
+  mutate(is_expensive = ifelse(is.na(is_expensive), FALSE, TRUE )) %>%
+  ggplot() +
+  geom_sf(aes(fill = is_expensive), color = "darkgrey", size = 0.4) +
+  scale_fill_viridis_d()
+```
+
+```{r}
+relevant_columns_for_expensive_neighbourhoods <- c(
+  "id", 
+  "host_id",
+  "price",
+  "property_type", 
+  "accommodates",
+  "number_of_reviews"
+)
+
+print_info_for_expensive_neighbourhoods <- function(listings) {
+  listings %>%
+    select(relevant_columns_for_expensive_neighbourhoods) %>%
+    arrange(desc(price))
+}
+
+listings_haselhorst <- listings_price_cleaned %>%
+  filter(neighbourhood == 'Haselhorst')
+listings_marzahn_nord <- listings_price_cleaned %>%
+  filter(neighbourhood == 'Marzahn-Nord')
+listings_marzahn_sud <- listings_price_cleaned %>%
+  filter(neighbourhood == 'Marzahn-Süd')
+listings_rummelsburger_bucht <- listings_price_cleaned %>%
+  filter(neighbourhood == 'Rummelsburger Bucht')
+listings_spandau_mitte <- listings_price_cleaned %>%
+  filter(neighbourhood == 'Spandau Mitte')
+```
+
+```{r}
+print_info_for_expensive_neighbourhoods(listings_haselhorst)
+```
+
+```{r}
+boat_vector <- c("Boat", "Houseboat")
+
+is_boat <- function(property_type) {
+  property_type %in% boat_vector
+}
+
+listings_haselhorst %>%
+  mutate(is_boat = is_boat(property_type)) %>%
+  group_by(is_boat) %>%
+  summarise(count = n()) %>%
+  ggplot(aes(x = is_boat, y = count)) +
+  geom_bar(stat='identity')
+```
+
+
+Learnings from Haselhorst:
+  - It only has a small number of listings
+  - 70% of the listings are boats or houseboats
+  - 50% of the listings belong to the same host and have an equal price
+  - The most expensive listing does not have any reviews
+
+```{r}
+print_info_for_expensive_neighbourhoods(listings_marzahn_nord)
+```
+
+Learnings from Marzahn-Nord:
+  - Only few listings
+  - most expensive listing can be considered as outlier, since it does not have any reviews and is significantly more expensive than the other listings of the same neighbourhood
+
+```{r}
+marzahn_nord_only_with_reviews <- listings_marzahn_nord %>%
+  filter(number_of_reviews > 0)
+```
+
+
+```{r}
+print_info_for_expensive_neighbourhoods(listings_marzahn_sud)
+```
+
+```{r}
+marzahn_sud_only_with_reviews <- listings_marzahn_sud %>%
+  filter(number_of_reviews > 0)
+print_info_for_expensive_neighbourhoods(marzahn_sud_only_with_reviews)
+```
+
+```{r}
+bin_break <- 3
+max_accommodates <- max(marzahn_sud_only_with_reviews$accommodates)
+
+marzahn_sud_only_with_reviews %>%
+  mutate(accommodates_bin = cut(accommodates, breaks = c(0, 3, max_accommodates))) %>%
+  ggplot(aes(x = accommodates_bin, y = price)) +
+  geom_boxplot()
+```
+
+Learnings from Marzahn-Nord:
+  - 4 most expensive listings highly distort the data set with a significantly higher price than the rest, despite not having any reviews
+  - 4 out of 5 out of the remaining most expensive listings are serviced apartments and offered by the same host
+  - the more people accommodated the higher the price
+
+```{r}
+listings_rummelsburger_bucht %>%
+  ggplot(aes(x = accommodates, y = price)) +
+  geom_point()
+```
+
+```{r}
+listings_rummelsburger_bucht %>%
+  mutate(is_boat = is_boat(property_type)) %>%
+  ggplot(aes(x = is_boat, y = price)) +
+  geom_boxplot()
+```
+
+```{r}
+print_info_for_expensive_neighbourhoods(listings_rummelsburger_bucht)
+```
+
+```{r}
+is_entire_home <- function(property_type) {
+  contains_keyword_entire <- grepl(pattern = "Entire", x = property_type, fixed = TRUE)
+  is_tiny_home <- property_type == "Tiny home"
+  is_boat <- is_boat(property_type)
+  contains_keyword_entire | is_tiny_home | is_boat
+}
+
+listings_rummelsburger_bucht %>%
+  mutate(is_entire_home = is_entire_home(property_type)) %>%
+  ggplot(aes(x = is_entire_home, y = price)) +
+  geom_boxplot()
+```
+
+```{r}
+listings_rummelsburger_bucht %>%
+  mutate(is_entire_home = is_entire_home(property_type)) %>%
+  group_by(is_entire_home) %>%
+  summarise(count_listings = n()) %>%
+  ggplot(aes(x="", y=count_listings, fill=is_entire_home)) +
+  geom_bar(stat="identity", width=1) +
+  coord_polar("y", start=0) +
+  scale_fill_viridis_d()
+```
+
+Learnings from Rummelsburger Bucht:
+  - most of the listings are not shared with host or other guests
+  - again a lot of house boats among the most expensive listings
+
+```{r}
+is_top_5_neighbourhood <- function(neighbourhood_name) {
+  neighbourhood_name %in% neighbourhoods_top_5_avg_price$neighbourhood
+}
+
+listings_only_with_reviews <- listings_price_cleaned %>%
+  filter(number_of_reviews > 0)
+
+listings_grouped_by_neighbourhood_only_with_reviews <- summarise_listings_by_neighbourhood(listings_only_with_reviews)
+
+listings_grouped_by_neighbourhood_only_with_reviews %>%
+  mutate(is_top_5_expensive = is_top_5_neighbourhood(neighbourhood)) %>%
+  arrange(count_listings) %>%
+  ggplot(aes(x = count_listings, y = avg_price, shape = is_top_5_expensive, colour = is_top_5_expensive)) +
+  geom_point()
+```
+
+
+```{r}
+neighbourhoods_aggregated %>%
+  mutate(avg_price_bin = ntile(x=avg_price, n=5)) %>%
+  mutate(avg_price_bin = as.character(avg_price_bin)) %>%
+  ggplot() +
+  geom_sf(aes(fill = avg_price_bin), color = "white", size = 0.2) +
+  scale_fill_viridis_d()
+```
+
+Why are Marzahn-Süd, Marzahn-Nord and Haselhorst on average so expensive?
+
+```{r}
+neighbourhoods_with_avg_price_per_guest <- listings_price_cleaned %>%
+  # filtering is necessary because few rows have 0 accommodates
+  filter(accommodates != 0) %>%
+  mutate(price_per_guest = price / accommodates) %>%
+  group_by(neighbourhood_cleansed) %>%
+  summarise(avg_price_per_guest = mean(price_per_guest)) %>%
+  mutate(neighbourhood = neighbourhood_cleansed) %>%
+  inner_join(berlin_neighbourhoods, by="neighbourhood") %>%
+  st_as_sf()
+```
+
+```{r}
+neighbourhoods_with_avg_price_per_guest %>%
+  ggplot() +
+  geom_sf(aes(fill = avg_price_per_guest), color = "white", size = 0.2) +
   scale_fill_viridis_c()
 ```
 
 ```{r}
-neighbourhoods_with_avg_price %>%
-  mutate(avg_price_bin = ntile(x=avg_price_per_neighbourhood, n=5)) %>%
+neighbourhoods_with_avg_price_per_guest %>%
+  mutate(avg_price_per_guest_bin = ntile(x=avg_price_per_guest, n=5)) %>%
   ggplot() +
-  geom_sf(aes(fill = avg_price_bin), color = "white", size = 0.2) +
+  geom_sf(aes(fill = avg_price_per_guest_bin), color = "white", size = 0.2) +
   scale_fill_viridis_c()
 ```
 
-Why are Marzahn-Süd, Wartenberg and Haselhorst on average so expensive?
 
+```{r}
+listings_cgram_shape_path <- "data/neighbourhoods_listings_cgram.shp"
+if (!file.exists(listings_cgram_shape_path)) {
+  neighbourhood_with_listings_per_area %>%
+    st_transform("+proj=merc") %>%
+    mutate(
+      centroid = st_centroid(geometry),
+      scale_factor = 0.75,
+      geometry = (geometry - centroid) * scale_factor + centroid
+    ) %>%
+    select("count_listings_per_area", neighbourhood) %>%
+    cartogram_cont("count_listings_per_area", itermax=10) %>%
+    write_sf(listings_cgram_shape_path)
+}
+listings_cgram_shape <- read_sf(listings_cgram_shape_path)
+ggplot(listings_cgram_shape) +
+  geom_sf()
+```
+
+```{r}
+neighbourhoods_reviews_per_area <- listings_grouped_by_neighbourhood %>%
+  inner_join(neighbourhoods_with_area, by="neighbourhood") %>%
+  st_as_sf() %>%
+  mutate(reviews_per_area = count_reviews / drop_units(area))
+
+```
+
+
+```{r}
+reviews_cgram_shape_path <- "data/neighbourhoods_reviews_cgram.shp"
+if (!file.exists(reviews_cgram_shape_path)) {
+  neighbourhoods_aggregated %>%
+    st_transform("+proj=merc") %>%
+    mutate(
+      centroid = st_centroid(geometry),
+      scale_factor = 0.2,
+      geometry = (geometry - centroid) * scale_factor + centroid
+    ) %>%
+    cartogram_cont("count_reviews", itermax=10) %>%
+    write_sf(reviews_cgram_shape_path)
+}
+reviews_cgram_shape <- read_sf(reviews_cgram_shape_path)
+ggplot(reviews_cgram_shape) +
+  geom_sf()
+```
+
+```{r}
+reviews_cgram_shape %>%
+  mutate(neighbourhood = nghbrhd) %>%
+  inner_join(neighbourhoods_aggregated, by="neighbourhood") %>%
+  ggplot() +
+  geom_sf(aes(fill = avg_price), color = "white", size = 0.2) +
+  scale_fill_viridis_c()
+```
+
+
+```{r}
+neighbourhoods_reviews_per_area %>%
+  mutate(reviews_per_area_bin = ntile(x=reviews_per_area, n=5)) %>%
+  ggplot() +
+  geom_sf(aes(fill = reviews_per_area_bin), color = "white", size = 0.2) +
+  scale_fill_viridis_c()
+```
