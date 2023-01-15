@@ -14,6 +14,7 @@ knitr::opts_chunk$set(echo = TRUE)
 Airbnb has been in many places in the world subject to criticism for misuse of apartments and increase in home rents. To have adequate evidence as a basis for discussions and decisionmakers in the affected cities, [insideairbnb.com](insideairbnb.com) provides real-world data about accommodations that are offered by hosts and also about reviews which have been submitted by guests.
 
 For this project I will use the following files provided by the project:
+
   - [listings](http://data.insideairbnb.com/germany/be/berlin/2022-09-15/visualisations/listings.csv): The offered accommodations
   - [reviews](http://data.insideairbnb.com/germany/be/berlin/2022-09-15/visualisations/reviews.csv): Reviews submitted by guests
   - additional [geodata about neighbourhoods](http://data.insideairbnb.com/germany/be/berlin/2022-09-15/visualisations/neighbourhoods.geojson)
@@ -56,6 +57,7 @@ berlin_neighbourhoods %>%
   ggplot() +
   geom_sf()
 ```
+
 The plot above is the map of Berlin, with the neighbourhoods as defined by Airbnb. It is worth to note that these neighbourhood definitions in many parts significantly deviate from the actual official neighbourhoods. However, the 16 `neighbourhood_groups` (not depicted) do refer to the actual districts of the city.
 
 The following will load all the listings.
@@ -118,8 +120,7 @@ listings_grouped_by_neighbourhood_uncleaned %>%
   labs(fill = "Average price in $")
 ```
 
-Now this is really surprising. The two most expensive neighbourhoods seem to be located at the eastern city boundary. This was totally u
-nexpected, as this part of the city is otherwise not known for being highly desired by wealthy people. Before I continue I will store these two neighbourhoods in a variable so that I can use them for some comparison later.
+Now this is really surprising. The two most expensive neighbourhoods seem to be located at the eastern city boundary. This was totally unexpected, as this part of the city is otherwise not known for being highly desired by wealthy people. Before I continue I will store these two neighbourhoods in a variable so that I can use them for some comparison later.
 
 ```{r}
 neighbourhoods_top_2_expensive_uncleaned <- listings_grouped_by_neighbourhood_uncleaned %>%
@@ -145,7 +146,7 @@ listings_grouped_by_neighbourhood_uncleaned %>%
   labs(subtitle = paste("n =", count_neighbourhoods_uncleaned))
 ```
 
-I appears that the two most expensive neighbourhoods have very few listings offered. At this point I have not considered whether the listings that I have processed so far are actually interesting, in the sense that people actually book them. To find this out I will make use of the `number_of_reviews` column in the listings table which holds the information how many reviews had been submitted in the past for this listing. I will filter out those listings which do not have any reviews and then call the previously defined method again and also redraw the scatter plot.
+It appears that the two most expensive neighbourhoods have very few listings offered. At this point I have not considered whether the listings that I have processed so far are actually interesting, in the sense that people actually book them. To find this out I will make use of the `number_of_reviews` column in the listings table which holds the information how many reviews had been submitted in the past for this listing. I will filter out those listings which do not have any reviews and then call the previously defined method again and also redraw the scatter plot.
 
 ```{r}
 listings_only_with_reviews <- listings_price_cleaned %>%
@@ -183,10 +184,10 @@ listings_grouped_by_neighbourhood_cleaned %>%
 
 First, apparently an entire neighbourhood is being disregarded. In the northeast there is now a grey spot, since this neighbourhood only held listings which did not have any reviews. Second, contrary to my assumption now the most expensive neighbourhoods are not the ones in the city center (although they apparently also have a high average price), but rather among them are two in the far west of the city and one southeast of the city center. Especially the ones in the western part raise my attention. What I know is that there is a lot of water because one of the two biggest rivers in the city, the Havel, flows there. Also the one in the southeast is by the riverside, of the river Spree in this case. Therefore I will now plot the most important water ways together with the most expensive neighbourhoods.
 
-I will start by loading the water data. I will not plot the entire geospatial data, that would clutter the map too much. Instead I will only show the biggest water ways.
+I will start by loading the water data. I will not plot all the geospatial data, that would clutter the map too much. Instead I will only show the biggest water ways.
 
 ```{r}
-rivers_waterways <- st_read("data/gis_osm_water_a_free_1.shp", layer = "gis_osm_water_a_free_1") %>%
+rivers_waterways <- st_read("data/gis_water/gis_osm_water_a_free_1.shp", layer = "gis_osm_water_a_free_1") %>%
   mutate(area = st_area(.)) %>%
   drop_units()
   
@@ -439,8 +440,9 @@ reviewers %>%
   ggtitle("Share of users that have submitted one or multiple reviews") +
   xlab("") +
   labs(subtitle = paste("n =", format(as.numeric(count_of_reviewers), nsmall=0, big.mark=","))) +
-  scale_fill_discrete(name=NULL)+ 
-  scale_y_continuous(name="", labels = scales::comma)
+  scale_fill_viridis_d(name=NULL, option = "magma") +
+  scale_y_continuous(name="", labels = scales::comma, expand = c(0, 1)) + 
+  theme(axis.text.x = element_text(size=8))
 ```
 
 Only a small portion of the users in the data set have ever written more than one review in Berlin. Now how exactly do they distribute across the number of submitted review? Therefore I will again make use of a beeswarm plot.
@@ -472,15 +474,17 @@ reviewers_top_3 <- reviewers_with_multiple_reviews %>%
   arrange(desc(count_reviews)) %>%
   slice_head(n = 3)
 
-reviewers_top_3_ids_vector <- reviewers_top_3 %>%
+reviewer_top_3_ids_vector <- reviewers_top_3 %>%
   select(reviewer_id) %>%
   pull()
 
 reviewers_top_3 %>%
-  mutate(reviewer_id = factor(reviewer_id, levels = reviewers_top_3_ids_vector)) %>%
-  ggplot(aes(x = reviewer_id, y = count_reviews)) +
+  mutate(reviewer_id = factor(reviewer_id, levels = reviewer_top_3_ids_vector)) %>%
+  ggplot(aes(x = reviewer_id, y = count_reviews, fill = reviewer_id)) +
   geom_bar(stat='identity') +
+  scale_fill_viridis_d(option = "magma") +
   ggtitle("Count of reviews submitted by the top 3 users") +
+  labs(fill = "Reviewer ID") +
   xlab("User ID") +
   ylab("Count of reviews")
 ```
@@ -495,7 +499,7 @@ reviewers_top_3_reviews %>%
   group_by(year_month, reviewer_id) %>%
   summarise(count_reviews_per_month = n()) %>%
   mutate(year_month = ym(year_month)) %>%
-  mutate(reviewer_id = factor(reviewer_id, levels = reviewers_top_3_ids_vector)) %>%
+  mutate(reviewer_id = factor(reviewer_id, levels = reviewer_top_3_ids_vector)) %>%
   ggplot(aes(x=year_month, y=count_reviews_per_month, fill = reviewer_id)) +
   geom_bar(position="stack", stat="identity", color = "black") + 
   scale_fill_viridis_d(option = "magma") +
@@ -516,11 +520,13 @@ reviewers_top_3_reviews_listings <- reviewers_top_3_reviews %>%
 reviewers_top_3_reviews_listings %>%
   group_by(reviewer_id, accommodates) %>%
   summarise(count_accommodates = n()) %>%
-  mutate(reviewer_id = factor(reviewer_id, levels = reviewers_top_3_ids_vector)) %>%
-  ggplot(mapping = aes(x = accommodates, y = count_accommodates)) +
+  mutate(reviewer_id = factor(reviewer_id, levels = reviewer_top_3_ids_vector)) %>%
+  ggplot(mapping = aes(x = accommodates, y = count_accommodates, fill = reviewer_id)) +
   geom_bar(stat = "identity") +
+  scale_fill_viridis_d(option = "magma") +
   facet_wrap(vars(reviewer_id)) +
   ggtitle("Number of guests possibly accommodated for user") +
+  labs(fill = "Reviewer ID") +
   xlab("Number of guests that could have been accommodated") +
   ylab("Number of reviews")
 ```
@@ -533,11 +539,13 @@ reviewers_top_3_reviews_listings %>%
   mutate(price_bin = cut(price, breaks = c(0, 25, 50, 75, 100, 125, 150, Inf))) %>%
   group_by(reviewer_id, price_bin) %>%
   summarise(count_price_bin = n()) %>%
-  mutate(reviewer_id = factor(reviewer_id, levels = reviewers_top_3_ids_vector)) %>%
-  ggplot(aes(x = price_bin, y = count_price_bin)) +
+  mutate(reviewer_id = factor(reviewer_id, levels = reviewer_top_3_ids_vector)) %>%
+  ggplot(aes(x = price_bin, y = count_price_bin, fill = reviewer_id)) +
   geom_bar(stat = "identity") +
+  scale_fill_viridis_d(option = "magma") +
   facet_wrap(vars(reviewer_id)) +
-  ggtitle("Price bins") +
+  ggtitle("Price bins for user") +
+  labs(fill = "Reviewer ID") +
   xlab("Price bins in $") +
   ylab("Number of reviews") +
   theme(axis.text.x = element_text(angle = 45, vjust = 1, hjust=1))
@@ -569,7 +577,7 @@ Now I will call the previously defined function for the first user.
 
 ```{r}
 reviewers_top_3_reviews_listings %>%
-  filter(reviewer_id == reviewer_top_3_ids[1]) %>%
+  filter(reviewer_id == reviewer_top_3_ids_vector[1]) %>%
   get_plot_map_count_reviews_per_neighbourhood()
 ```
 
@@ -577,7 +585,7 @@ User 47369497 has a clear preference towards the area around the "Kurfürstendam
 
 ```{r}
 reviewers_top_3_reviews_listings %>%
-  filter(reviewer_id == reviewer_top_3_ids[2]) %>%
+  filter(reviewer_id == reviewer_top_3_ids_vector[2]) %>%
   get_plot_map_count_reviews_per_neighbourhood()
 ```
 
@@ -585,7 +593,7 @@ User 119795263 also has a clear preference about where to sleep in the city. Whi
 
 ```{r}
 reviewers_top_3_reviews_listings %>%
-  filter(reviewer_id == reviewer_top_3_ids[3]) %>%
+  filter(reviewer_id == reviewer_top_3_ids_vector[3]) %>%
   get_plot_map_count_reviews_per_neighbourhood()
 ```
 
@@ -593,16 +601,17 @@ Now this is interesting. User 107428449, having stayed in Berlin for 30 times, n
 
 ```{r}
 reviewers_top_3_reviews_listings %>%
-  filter(reviewer_id == reviewer_top_3_ids[3]) %>%
+  filter(reviewer_id == reviewer_top_3_ids_vector[3]) %>%
   group_by(listing_id, host_id) %>%
   summarise(count = n()) %>%
   ggplot(aes(x = listing_id, y = count, fill=host_id)) + 
   geom_bar(stat="identity") + 
   scale_fill_viridis_d(option = "magma") +
+  scale_y_continuous(breaks=c(2,4,6,8,10)) +
   xlab("Listing ID") + 
   ylab("Number of reviews") +
   labs(fill = "Host ID") +
-  ggtitle(paste("Number of reviews per listing from user", reviewer_top_3_ids[3]))
+  ggtitle(paste("Number of reviews per listing from user", reviewer_top_3_ids_vector[3]))
 ```
 
 Even more interesting: The user nearly always chooses the same host, but different accommodations. This seems a bit suspicious to me. Why would someone book 5 different accommodations from the same host 29 times within a bit more than one year, more or less constantly between one and three times per month? Either the user and the host have some kind of personal relationship or this is review fraud.
@@ -612,7 +621,7 @@ As a quick plausibility check I will compare the distribution of the comments of
 ```{r}
 reviewers_top_3_reviews_listings %>%
   mutate(comment_length = nchar(comments)) %>%
-  mutate(reviewer_id = factor(reviewer_id, levels = reviewers_top_3_ids_vector)) %>%
+  mutate(reviewer_id = factor(reviewer_id, levels = reviewer_top_3_ids_vector)) %>%
   ggplot(aes(x = reviewer_id, y = comment_length)) +
   geom_quasirandom(alpha=0.4, size=2) +
   ggtitle("Distribution of review comment length") +
