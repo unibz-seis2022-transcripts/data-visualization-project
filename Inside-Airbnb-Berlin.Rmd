@@ -9,12 +9,36 @@ output: html_document
 knitr::opts_chunk$set(echo = TRUE)
 ```
 
+# Inside Airbnb: Berlin
+
+Airbnb has been in many places in the world subject to criticism for misuse of apartments and increase in home rents. To have adequate evidence as a basis for discussions and decisionmakers in the affected cities, [insideairbnb.com](insideairbnb.com) provides real-world data about accommodations that are offered by hosts and also about reviews which have been submitted by guests.
+
+For this project I will use the following files provided by the project:
+  - [listings](http://data.insideairbnb.com/germany/be/berlin/2022-09-15/visualisations/listings.csv): The offered accommodations
+  - [reviews](http://data.insideairbnb.com/germany/be/berlin/2022-09-15/visualisations/reviews.csv): Reviews submitted by guests
+  - additional [geodata about neighbourhoods](http://data.insideairbnb.com/germany/be/berlin/2022-09-15/visualisations/neighbourhoods.geojson)
+
+The offered data are scraped four times per year. In this project I will use the information as of September 2022. As location I decided to use Berlin, the capital of Germany, where I used to live before for multiple years.
+
+The listings represent the accommodations offered via Airbnb. Each line holds information like the name of the accommodation, what kind of property the accommodation exactly is (e. g. Private room in home, Entire townhouse), the part of the city ("neighbourhood") in which it is located, the price per night, the number of guests that can be accommodated and also already aggregated information about the reviews it received, such as the average score and the number of reviews. The respective csv file has in total 16,680 lines.
+
+Every review has a reference to the listing it belongs to, the date it has been submitted as well as name and id of the reviewer. The review dataset consists of 463,145 entries.
+
+With this project I would like to find out which places in the city are amongst the most expensive and why. In the past I rarely used Airbnb and also never in Berlin, since this was the city where I used to live. Therefore, I have some asumptions about the price and would like to see if I can verify or disprove them.
+
+Part of my motivation is also to gather insights about the guests staying in Berlin, be it which places in the city they prefer to stay in or how often they book an accommodation there. While actual booking data is not publicly available, only the reviews submitted by guests are. However, from my user experience I can tell that Airbnb highly encourages guests to submit a review after their stay, e. g. by sending multiple reminder e-mails. Therefore, I assume that the available review data are in a way representative for the actual booking behaviour of guests.
+
+The dataset is quite vast, however it is not entirely comprehensive. Apparently the data provided only consist of accommodations that were bookable at runtime and reviews that have been submitted after a stay in these accommodations. Other data, that is also publicly available, such as accommodations that currently can not be booked as well as their reviews, are not included.
+
 ```{r}
+library(ggplot2)
 library(tidyverse)
 library(sf)
 library(units)
 library(ggbeeswarm)
 library(lubridate)
+library(ggrepel)
+library(forcats)
 ```
 
 ```{r}
@@ -31,7 +55,9 @@ listings_price_cleaned <- listings_raw %>%
   mutate(neighbourhood=neighbourhood_cleansed) %>%
   mutate(neighbourhood_group=neighbourhood_group_cleansed) %>%
   mutate(price = str_remove_all(price, "[$,]")) %>%
-  mutate(price = as.double(price))
+  mutate(price = as.double(price)) %>%
+  mutate(host_id = as.character(host_id)) %>%
+  mutate(id = as.character(id))
 ```
 
 ```{r}
@@ -41,7 +67,7 @@ wrapper <- function(x, ...)
 }
 ```
 
-# Which are the 5 most expensive neighbourhoods and why?
+# Why are certain neighbourhoods outside the city center on average so expensive?
 
 ```{r}
 summarise_listings_by_neighbourhood <- function(listings) {
@@ -49,28 +75,469 @@ summarise_listings_by_neighbourhood <- function(listings) {
     group_by(neighbourhood) %>%
     summarise(
       count_listings=n(),
-      count_reviews=sum(number_of_reviews), 
+      count_reviews=sum(number_of_reviews),
       avg_price = mean(price), 
-      median_price = median(price)
-    )
+      median_price = median(price),
+      avg_review_score = mean(review_scores_rating)
+    ) %>%
+    inner_join(berlin_neighbourhoods, by= "neighbourhood") %>%
+    st_as_sf()
 }
 
-listings_grouped_by_neighbourhood <- summarise_listings_by_neighbourhood(listings_price_cleaned)
+listings_grouped_by_neighbourhood_uncleaned <- summarise_listings_by_neighbourhood(listings_price_cleaned)
 ```
 
 ```{r}
-neighbourhoods_aggregated <- listings_grouped_by_neighbourhood %>%
-  inner_join(berlin_neighbourhoods, by= "neighbourhood") %>%
-  st_as_sf()
-```
-
-```{r}
-neighbourhoods_aggregated %>%
+listings_grouped_by_neighbourhood_uncleaned %>%
   ggplot() +
-  geom_sf(aes(fill = avg_price), color = "white", size = 0.2) +
+  geom_sf(aes(fill = avg_price), color = "black", size = 0.2) +
   scale_fill_viridis_c() +
-  ggtitle("Berlin neighbourhoods and their average price") +
+  ggtitle("Berlin neighbourhoods and their average price (before cleaning)") +
   labs(fill = "Average price in $")
+```
+
+```{r}
+neighbourhoods_top_2_expensive_uncleaned <- listings_grouped_by_neighbourhood_uncleaned %>%
+  top_n(2, avg_price) %>%
+  select("neighbourhood") %>%
+  st_drop_geometry() %>%
+  pull()
+```
+
+```{r}
+listings_grouped_by_neighbourhood_uncleaned %>%
+  arrange(desc(avg_price)) %>%
+  mutate(neighbourhood = ifelse(row_number() <= 2, neighbourhood, "")) %>%
+  ggplot(aes(x = count_listings, y = avg_price)) +
+  geom_point(color = "grey") +
+  geom_text_repel(aes(label = neighbourhood)) +
+  ggtitle("Neighbourhoods by number of listings and average price (before cleaning)") +
+  xlab("Number of listings") +
+  ylab("Average price in $")
+```
+
+```{r}
+listings_only_with_reviews <- listings_price_cleaned %>%
+  filter(number_of_reviews > 0)
+
+listings_grouped_by_neighbourhood_cleaned <- summarise_listings_by_neighbourhood(listings_only_with_reviews)
+
+listings_grouped_by_neighbourhood_cleaned %>%
+  arrange(desc(avg_price)) %>%
+  mutate(neighbourhood = ifelse(neighbourhood %in% neighbourhoods_top_2_expensive_uncleaned, neighbourhood, "")) %>%
+  ggplot(aes(x = count_listings, y = avg_price)) +
+  geom_point(color = "grey") +
+  geom_text_repel(
+    aes(label = neighbourhood), 
+    max.overlaps = Inf,
+    min.segment.length = 0,
+  ) +
+  ggtitle("Neighbourhoods by number of listings and average price (after cleaning)") +
+  xlab("Number of listings") +
+  ylab("Average price in $")
+```
+
+```{r}
+listings_grouped_by_neighbourhood_cleaned %>%
+  ggplot() +
+  geom_sf(aes(fill = avg_price), color = "black", size = 0.2) +
+  scale_fill_viridis_c() +
+  ggtitle("Berlin neighbourhoods and their average price (after cleaning)") +
+  labs(fill = "Average price in $")
+```
+
+```{r}
+rivers_waterways <- st_read("data/gis_osm_water_a_free_1.shp", layer = "gis_osm_water_a_free_1") %>%
+  mutate(area = st_area(.)) %>%
+  drop_units()
+  
+top_n_area_waterways <- rivers_waterways %>%
+  arrange(desc(area)) %>% 
+  head(364)
+```
+
+Waterways URL: https://download.geofabrik.de/europe/germany/berlin.html
+
+```{r}
+listings_grouped_by_neighbourhood_cleaned %>%
+  arrange(desc(avg_price)) %>%
+  mutate(is_top_5 = ifelse(row_number() <= 5, TRUE, FALSE)) %>%
+  mutate(neighbourhood = ifelse(is_top_5 & neighbourhood_group %in% c("Lichtenberg", "Spandau"), neighbourhood, "")) %>%
+  mutate(is_top_5 = factor(is_top_5, levels = c(TRUE, FALSE), labels = c("Top 5 mean price neighbourhoods", "Rest of neighbourhoods"))) %>%
+  ggplot() + 
+  geom_sf(aes(fill = is_top_5), lwd = 0) +
+  geom_sf(data = top_n_area_waterways, color = alpha("blue",0.3)) +
+  coord_sf(clip = "off") +
+  geom_label_repel(
+    aes(label = neighbourhood, geometry = geometry),
+    stat = "sf_coordinates",
+    min.segment.length = 0,
+    max.overlaps = Inf,
+    xlim = c(-Inf, Inf), 
+    ylim = c(-Inf, Inf),
+    nudge_y = -.18,
+    segment.curvature = -0.1,
+    segment.ncp = 3,
+    segment.angle = 20,
+    direction = "both",
+  ) +
+  ggtitle("Top 5 mean price neighbourhoods and important waterways") +
+  labs(fill = "Neighbourhood category") +
+  xlab("") +
+  ylab("")
+```
+
+```{r}
+boat_vector <- c("Boat", "Houseboat")
+
+is_boat <- function(property_type) {
+  property_type %in% boat_vector
+}
+
+get_plot_price_by_boat_or_other_property_type <- function(listings) {
+  listings %>%
+    mutate(is_boat = factor(is_boat(property_type), levels = c(TRUE, FALSE), labels = c("Boat", "Other property type"))) %>%
+    ggplot(aes(x = is_boat, y = price))
+}
+
+get_avg_price_for_neighbourhood <- function(neighbourhood_to_search) {
+  listings_grouped_by_neighbourhood_cleaned %>%
+  filter(neighbourhood == neighbourhood_to_search) %>%
+  st_drop_geometry() %>%
+  select(avg_price) %>%
+  pull()
+}
+```
+
+```{r}
+is_entire_home <- function(property_type) {
+  contains_keyword_entire <- grepl(pattern = "Entire", x = property_type, fixed = TRUE)
+  other_entire_homes_vector <- c("Tiny home", "Treehouse", "Castle", "Hut", "Island")
+  is_other_entire_home <- property_type %in% other_entire_homes_vector
+  
+  return(contains_keyword_entire | is_other_entire_home)
+}
+
+is_serviced_home <- function(property_type) {
+  grepl(pattern = "serviced", x = property_type, fixed = TRUE)
+}
+
+get_property_category <- function(property_type) {
+  case_when(
+    is_serviced_home(property_type) ~ "Serviced home",
+    is_entire_home(property_type) ~ "Entire home",
+    is_boat(property_type) ~ "Boat",
+    TRUE ~ "Something different"
+  )
+}
+
+plot_price_per_property_category <- function(listings, neighbourhood, label_x_offset, label_y_offset) {
+  host_ids_multiple_occurencies <- listings %>%
+    group_by(host_id) %>%
+    summarise(count = n()) %>%
+    filter(count > 1) %>%
+    select("host_id") %>%
+    pull()
+  
+  avg_price <- mean(listings$price)
+  
+  host_type_description <- "Belongs to host"
+  title <- paste("Price of listings by property type in", neighbourhood)
+  listings %>%
+    mutate(property_category = get_property_category(property_type)) %>%
+    mutate(multi_accommodation_host = host_id %in% host_ids_multiple_occurencies) %>%
+    mutate(host_id = ifelse(multi_accommodation_host, host_id, "Single-accommodation hosts")) %>%
+    ggplot(aes(x = property_category, y = price, color=host_id, shape=host_id)) +
+    geom_quasirandom(alpha = .8, width = .2) +
+    geom_hline(yintercept=avg_price, linetype="dashed") +
+    annotate("text", x=label_x_offset, y=avg_price + label_y_offset, label="Mean price") +
+    ggtitle(title) +
+    labs(color = host_type_description, shape = host_type_description) +
+    xlab("Property type") +
+    ylab("Price in $")
+}
+```
+
+## Haselhorst
+
+```{r}
+haselhorst_name <- 'Haselhorst'
+listings_haselhorst <- listings_only_with_reviews %>%
+  filter(neighbourhood == haselhorst_name)
+
+listings_haselhorst %>%
+  plot_price_per_property_category(haselhorst_name, .7, 5)
+```
+
+## Spandau Mitte
+
+```{r}
+spandau_mitte_name <- 'Spandau Mitte'
+listings_spandau_mitte <- listings_only_with_reviews %>%
+  filter(neighbourhood == spandau_mitte_name)
+
+listings_spandau_mitte %>%
+  plot_price_per_property_category(spandau_mitte_name, .8, 15)
+```
+
+## Rummelsburger Bucht
+
+```{r}
+rummelsburger_bucht_name <- "Rummelsburger Bucht"
+listings_rummelsburger_bucht <- listings_only_with_reviews %>%
+  filter(neighbourhood == rummelsburger_bucht_name)
+
+listings_rummelsburger_bucht %>%
+  plot_price_per_property_category(rummelsburger_bucht_name, .7, 25)
+```
+
+## Entire Berlin
+
+```{r}
+listings_only_with_reviews %>%
+  mutate(property_category = get_property_category(property_type)) %>%
+  ggplot(aes(x = property_category, y = price)) +
+  geom_boxplot(outlier.shape = NA) +
+  coord_cartesian(ylim = quantile(listings_only_with_reviews$price, c(0, .995))) +
+  ggtitle("Median prices by property categories in entire Berlin") +
+  xlab("Listing property type") +
+  ylab("Price in $")
+```
+
+```{r}
+listings_only_with_reviews %>%
+  mutate(property_category = get_property_category(property_type)) %>%
+  group_by(property_category) %>%
+  summarise(count = n()) %>%
+  ggplot(aes(x = property_category, y = count)) +
+  geom_bar(stat='identity') +
+  ggtitle("Number of listings by property categories in entire Berlin") +
+  xlab("Listing property type") +
+  ylab("Count")
+```
+
+```{r}
+host_ids_multiple_occurencies <- listings_only_with_reviews %>%
+  group_by(host_id) %>%
+  summarise(count = n()) %>%
+  filter(count > 1) %>%
+  select("host_id") %>%
+  pull()
+
+get_host_type <- function(host_id) {
+  ifelse(host_id %in% host_ids_multiple_occurencies, "Multi-accommodation host", "Single-accommodation host")
+}
+
+listings_only_with_reviews %>%
+  mutate(host_type = get_host_type(host_id)) %>%
+  ggplot(aes(x = host_type, y = price)) +
+  geom_boxplot(outlier.shape = NA) +
+  coord_cartesian(ylim = quantile(listings_only_with_reviews$price, c(0, .99))) +
+  ggtitle("Median prices by host type in entire Berlin") +
+  xlab("Host type") +
+  ylab("Price in $")
+```
+
+# If a guest submitted multiple reviews, what can we learn about their behavior?
+
+```{r}
+reviews_url <- "data/reviews-09-2022.csv"
+reviews_raw <- read_csv(reviews_url) %>%
+  mutate(listing_id = as.character(listing_id)) %>%
+  mutate(id = as.character(id)) %>%
+  mutate(reviewer_id = as.character(reviewer_id))
+
+reviewers <- reviews_raw %>%
+  group_by(reviewer_id) %>%
+  summarise(count_reviews = n())
+
+reviewers %>%
+  mutate(has_submitted_multiple_reviews = count_reviews > 1) %>%
+  mutate(has_submitted_multiple_reviews = factor(has_submitted_multiple_reviews, 
+                                                 levels = c(FALSE, TRUE), 
+                                                 labels = c("Users that have submitted one review", "Users that have submitted multiple reviews")
+                                                 ))%>%
+  group_by(has_submitted_multiple_reviews) %>%
+  summarise(count_reviewers = n()) %>%
+  ggplot(aes(x="", y=count_reviewers, fill=has_submitted_multiple_reviews)) +
+  geom_bar(stat="identity", width=1, color="white") +
+  coord_polar("y", start=0) + 
+  ggtitle("Share of users that have submitted one or multiple reviews") +
+  xlab("") +
+  scale_fill_discrete(name=NULL)+ 
+  scale_y_continuous(name="", labels = scales::comma)
+```
+
+```{r}
+reviewers_with_multiple_reviews <- reviewers %>%
+  filter(count_reviews > 1)
+
+reviewers_with_multiple_reviews %>%
+  arrange(desc(count_reviews))
+
+max_reviews <- max(reviewers_with_multiple_reviews$count_reviews)
+bin_breaks <- c(5, 15, 20, 30, max_reviews)
+
+reviewers_with_multiple_reviews %>%
+  filter(count_reviews > 5) %>%
+  mutate(count_reviews_bin = cut(count_reviews, breaks = bin_breaks)) %>%
+  group_by(count_reviews_bin) %>%
+  summarise(count_reviewers = n()) %>%
+  ggplot(aes(x = count_reviews_bin, y = count_reviewers)) +
+  geom_bar(stat='identity') +
+  ggtitle("Number of submitted reviews binned") +
+  xlab("Submitted reviews bin") +
+  ylab("Number of users")
+```
+
+```{r}
+reviewers_top_3 <- reviewers_with_multiple_reviews %>%
+  arrange(desc(count_reviews)) %>%
+  slice_head(n = 3)
+
+reviewers_top_3_ids_vector <- reviewers_top_3 %>%
+  select(reviewer_id) %>%
+  pull()
+
+reviewers_top_3 %>%
+  mutate(reviewer_id = factor(reviewer_id, levels = reviewers_top_3_ids_vector)) %>%
+  ggplot(aes(x = reviewer_id, y = count_reviews)) +
+  geom_bar(stat='identity') +
+  ggtitle("Number of reviews submitted by the top 3 users") +
+  xlab("User ID") +
+  ylab("Number of reviews")
+```
+```{r}
+reviewers_top_3_reviews <- reviewers_top_3 %>%
+  inner_join(reviews_raw, by = "reviewer_id")
+reviewers_top_3_reviews %>%
+  mutate(year = year(date)) %>%
+  group_by(year, reviewer_id) %>%
+  summarise(count_reviews_per_year = n()) %>%
+  mutate(reviewer_id = factor(reviewer_id, levels = reviewers_top_3_ids_vector)) %>%
+  ggplot(aes(x=year, y=count_reviews_per_year, colour = reviewer_id)) +
+  geom_line() +
+  ggtitle("Number of reviews submitted by the top 3 users per year") +
+  xlab("Year") +
+  ylab("Number of reviews") +
+  labs(color = "Reviewer ID", subtitle = "(as of September 2022)")
+```
+
+```{r}
+reviewers_top_3_reviews_listings <- reviewers_top_3_reviews %>%
+  inner_join(listings_price_cleaned, by=c("listing_id" = "id"))
+reviewers_top_3_reviews_listings %>%
+  group_by(reviewer_id, accommodates) %>%
+  summarise(count_accommodates = n()) %>%
+  mutate(reviewer_id = factor(reviewer_id, levels = reviewers_top_3_ids_vector)) %>%
+  ggplot(mapping = aes(x = accommodates, y = count_accommodates)) +
+  geom_bar(stat = "identity") +
+  facet_wrap(vars(reviewer_id)) +
+  ggtitle("Number of guests possibly accommodated for user") +
+  xlab("Number of guests that could have been accommodated") +
+  ylab("Number of reviews")
+```
+
+```{r}
+reviewers_top_3_reviews_listings %>%
+  mutate(price_bin = cut(price, breaks = c(0, 25, 50, 75, 100, 125, 150, Inf))) %>%
+  group_by(reviewer_id, price_bin) %>%
+  summarise(count_price_bin = n()) %>%
+  mutate(reviewer_id = factor(reviewer_id, levels = reviewers_top_3_ids_vector)) %>%
+  ggplot(aes(x = price_bin, y = count_price_bin)) +
+  geom_bar(stat = "identity") +
+  facet_wrap(vars(reviewer_id)) +
+  ggtitle("Price bins") +
+  xlab("Price bins") +
+  ylab("Number of reviews") +
+  theme(axis.text.x = element_text(angle = 45, vjust = 1, hjust=1))
+```
+```{r}
+get_plot_map_count_reviews_per_neighbourhood <- function(user_reviews_listings) {
+  user_id <- user_reviews_listings %>%
+    slice_head() %>%
+    select(reviewer_id)
+  user_reviews_listings %>%
+    group_by(neighbourhood) %>%
+    summarise(count_reviews_per_neighbourhood = n()) %>%
+    right_join(berlin_neighbourhoods, by= "neighbourhood") %>%
+    st_as_sf() %>%
+    ggplot() +
+    geom_sf(aes(fill = count_reviews_per_neighbourhood), color = "black", size = 0.2) + 
+    scale_fill_viridis_c() +
+    ggtitle(paste("Number of reviews per neighbourhood for user", user_id)) +
+    labs(fill = "Number of reviews")
+}
+```
+
+```{r}
+reviewers_top_3_reviews_listings %>%
+  filter(reviewer_id == reviewer_top_3_ids[1]) %>%
+  get_plot_map_count_reviews_per_neighbourhood()
+```
+
+```{r}
+reviewers_top_3_reviews_listings %>%
+  filter(reviewer_id == reviewer_top_3_ids[2]) %>%
+  get_plot_map_count_reviews_per_neighbourhood()
+```
+
+```{r}
+reviewers_top_3_reviews_listings %>%
+  filter(reviewer_id == reviewer_top_3_ids[3]) %>%
+  get_plot_map_count_reviews_per_neighbourhood()
+```
+
+```{r}
+reviewers_top_3_reviews_listings %>%
+  filter(reviewer_id == reviewer_top_3_ids[3]) %>%
+  mutate(month = month(date)) %>%
+  mutate(year = year(date)) %>%
+  mutate(year_month = format(date,"%Y-%m")) %>%
+  group_by(year_month, listing_id) %>%
+  summarise(count = n()) %>%
+  mutate(year_month = ym(year_month)) %>%
+  ggplot(aes(x = year_month, y = count, fill=listing_id)) + 
+  geom_bar(position="stack", stat="identity") + 
+  scale_fill_viridis_d() +
+  scale_x_date(date_labels="%Y-%m", date_breaks  ="1 month") +
+  xlab("Month") + 
+  ylab("Number of reviews") +
+  labs(fill = "Listing ID") +
+  ggtitle(paste("Number of reviews per listing over time from user", reviewer_top_3_ids[3])) +
+  theme(axis.text.x = element_text(angle = 45, vjust = 1, hjust=1))
+```
+
+
+##########################################
+##########################################
+##########################################
+##########################################
+##########################################
+
+```{r}
+listings_grouped_by_neighbourhood_cleaned %>%
+  top_n(5, avg_price) %>%
+  select(c("neighbourhood", "neighbourhood_group", "avg_price")) %>%
+  arrange(desc(avg_price)) %>%
+  st_drop_geometry()
+```
+
+
+```{r}
+relevant_columns_for_expensive_neighbourhoods <- c(
+  "id", 
+  "host_id",
+  "price",
+  "property_type", 
+  "accommodates"
+)
+
+print_info_for_expensive_neighbourhoods <- function(listings) {
+  listings %>%
+    select(relevant_columns_for_expensive_neighbourhoods) %>%
+    arrange(desc(price))
+}
 ```
 
 Interesting observations: Surprisingly Marzahn-Süd has a high average price, but also other areas like Marzahn-Nord, Rummelsburg and Haselhorst.
@@ -196,7 +663,7 @@ Learnings from Haselhorst:
 listings_rummelsburger_bucht %>%
   ggplot(aes(x = accommodates, y = price)) +
   geom_quasirandom(alpha = .4, width = .3) +
-  ggtitle("Listings in 'Rummelsburger Bucht' by accomodated guests and price") +
+  ggtitle("Listings in 'Rummelsburger Bucht' by accommodated guests and price") +
   xlab("Number of guests that can be accommodated") +
   ylab("Price in $")
 ```
@@ -283,171 +750,6 @@ neighbourhoods_aggregated_only_with_reviews %>%
   scale_fill_viridis_c() +
   ggtitle(wrapper("Berlin neighbourhoods and their average price after removing listings without reviews", width = 80)) +
   labs(fill = "Average price in $")
-```
-
-# If a guest submitted multiple reviews, what can we learn about their behavior?
-
-```{r}
-reviews_url <- "data/reviews-09-2022.csv"
-reviews_raw <- read_csv(reviews_url)
-
-reviewers <- reviews_raw %>%
-  group_by(reviewer_id) %>%
-  summarise(count_reviews = n())
-
-reviewers %>%
-  mutate(has_submitted_multiple_reviews = count_reviews > 1) %>%
-  group_by(has_submitted_multiple_reviews) %>%
-  summarise(count_reviwers = n()) %>%
-  ggplot(aes(x = has_submitted_multiple_reviews, y = count_reviwers)) +
-  geom_bar(stat='identity') +
-  ggtitle("Number of users that have submitted multiple reviews") +
-  xlab("Has the user submitted more than one review") +
-  ylab("Number of users")
-```
-
-```{r}
-reviewers_with_multiple_reviews <- reviewers %>%
-  filter(count_reviews > 1)
-
-reviewers_with_multiple_reviews %>%
-  arrange(desc(count_reviews))
-
-max_reviews <- max(reviewers_with_multiple_reviews$count_reviews)
-bin_breaks <- c(9, 15, 20, 30, max_reviews)
-
-reviewers_with_multiple_reviews %>%
-  filter(count_reviews > 9) %>%
-  mutate(count_reviews_bin = cut(count_reviews, breaks = bin_breaks)) %>%
-  group_by(count_reviews_bin) %>%
-  summarise(count_reviewers = n()) %>%
-  ggplot(aes(x = count_reviews_bin, y = count_reviewers)) +
-  geom_bar(stat='identity') #+
-  #ggtitle("Price span of listings in 'Marzahn-Süd' by accommodated guests") +
-  #xlab("Accommodated guests bin") +
-  #ylab("Price in $")
-```
-
-```{r}
-reviewers_top_3 <- reviewers_with_multiple_reviews %>%
-  arrange(desc(count_reviews)) %>%
-  slice_head(n = 3)
-reviewers_top_3
-```
-```{r}
-reviewers_top_3_reviews <- reviewers_top_3 %>%
-  inner_join(reviews_raw, by = "reviewer_id")
-reviewers_top_3_reviews %>%
-  arrange(date) %>%
-  mutate(year = year(date)) %>%
-  group_by(year, reviewer_id) %>%
-  summarise(count_reviews_per_year = n()) %>%
-  mutate(reviewer_id = as.character(reviewer_id)) %>%
-  ggplot(aes(x=year, y=count_reviews_per_year, colour = reviewer_id)) +
-  geom_line()
-```
-
-```{r}
-get_joined_reviews_and_listings <- function(reviews) {
-  reviews %>%
-    inner_join(reviews_raw, by = "reviewer_id") %>%
-    mutate(review_id = id) %>%
-    # Drop possibly misleading column id
-    select(-id) %>%
-    inner_join(listings_price_cleaned, by = c("listing_id" = "id"))
-}
-
-plot_map_count_reviews_per_neighbourhood <- function(reviews) {
-  user_id <- reviews %>%
-    slice_head() %>%
-    select(reviewer_id)
-  joined_reviews_and_listings <- get_joined_reviews_and_listings(reviews)
-  joined_reviews_and_listings %>%
-    group_by(neighbourhood) %>%
-    summarise(count_reviews_per_neighbourhood = n()) %>%
-    right_join(berlin_neighbourhoods, by= "neighbourhood") %>%
-    st_as_sf() %>%
-    ggplot() +
-    geom_sf(aes(fill = count_reviews_per_neighbourhood), color = "white", size = 0.2) +
-    scale_fill_viridis_c() +
-    ggtitle(paste("Number of reviews per neighbourhood for user", user_id)) +
-    labs(fill = "Number of reviews")
-}
-
-plot_accommodates <- function(listings) {
-  user_id <- listings %>%
-    slice_head() %>%
-    select(reviewer_id)
-  listings %>%
-    group_by(accommodates) %>%
-    summarise(count_accommodates = n()) %>%
-    ggplot(aes(x = accommodates, y = count_accommodates)) +
-    geom_bar(stat = "identity") +
-    ggtitle(paste("Number of guests possibly accomodated for user", user_id)) +
-    xlab("Number of guests that can be accommodated") +
-    ylab("Number of reviews")
-}
-
-plot_price_bins <- function(listings) {
-  user_id <- listings %>%
-    slice_head() %>%
-    select(reviewer_id)
-  listings %>%
-    mutate(price_bin = cut(price, breaks = c(0, 25, 50, 75, 100, 125, 150, Inf))) %>%
-    group_by(price_bin) %>%
-    summarise(count = n()) %>%
-    ggplot(aes(x = price_bin, y = count)) +
-    geom_bar(stat = "identity") +
-    ggtitle(paste("Price bins for user", user_id)) +
-    xlab("Price bins") +
-    ylab("Number of reviews")
-}
-
-pivot_wider_amenities <- function(listings) {
-  listings %>%
-    mutate(amenities = str_replace_all(amenities, "[\\[\\]\"]", "")) %>%
-    mutate(amenities_split = strsplit(amenities, ",")) %>%
-    mutate(true_value = TRUE) %>%
-    unnest(amenities_split) %>%
-    pivot_wider(names_from = amenities_split, values_from = true_value, values_fill = FALSE)
-}
-
-get_share_of_amenities <- function(amenities_of_listings) {
-  amenities_of_listings %>%
-    summarize_all(funs(sum(. == TRUE))) %>%
-    gather(column_name, count) %>%
-    mutate(column_name = tolower(column_name)) %>%
-    mutate(share = count / nrow(first_reviewer_amenities)) %>%
-    arrange(desc(share))
-}
-```
-
-```{r}
-first_reviewer_reviews <- reviewers_top_3 %>%
-  slice_head(n = 1)
-plot_map_count_reviews_per_neighbourhood(first_reviewer_reviews)
-```
-
-```{r}
-first_reviewer_reviews_and_listings <- first_reviewer_reviews %>%
-  get_joined_reviews_and_listings()
-
-plot_accommodates(first_reviewer_reviews_and_listings)
-```
-
-
-```{r}
-plot_price_bins(first_reviewer_reviews_and_listings)
-```
-TODO: Use faceting for bar charts?
-
-```{r}
-first_reviewer_amenities <- first_reviewer_reviews_and_listings %>%
-  pivot_wider_amenities() %>%
-  select(-c(1:82))
-
-get_share_of_amenities(first_reviewer_amenities) %>%
-  filter(grepl(pattern = "coffee", x = column_name))
 ```
 
 # If the host is not living in Berlin, how does this affect the number of offered accommodations/price/rating/...?
