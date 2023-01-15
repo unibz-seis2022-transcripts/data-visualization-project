@@ -20,15 +20,17 @@ For this project I will use the following files provided by the project:
 
 The offered data are scraped four times per year. In this project I will use the information as of September 2022. As location I decided to use Berlin, the capital of Germany, where I used to live before for multiple years.
 
-The listings represent the accommodations offered via Airbnb. Each line holds information like the name of the accommodation, what kind of property the accommodation exactly is (e. g. Private room in home, Entire townhouse), the part of the city ("neighbourhood") in which it is located, the price per night, the number of guests that can be accommodated and also already aggregated information about the reviews it received, such as the average score and the number of reviews. The respective csv file has in total 16,680 lines.
+The listings represent the accommodations offered via Airbnb. Each line holds information like the name of the accommodation, what kind of property the accommodation exactly is (e. g. Private room in home, Entire townhouse), the part of the city ("neighbourhood") in which it is located, the price (which is per night), the number of guests that can be accommodated and also already aggregated information about the reviews it received, such as the average score and the number of reviews. The respective csv file has in total 16,680 lines.
 
-Every review has a reference to the listing it belongs to, the date it has been submitted as well as name and id of the reviewer. The review dataset consists of 463,145 entries.
+Every review has a reference to the listing it belongs to, the date it has been submitted as well as name and id of the reviewer. The review data set consists of 463,145 entries.
 
-With this project I would like to find out which places in the city are amongst the most expensive and why. In the past I rarely used Airbnb and also never in Berlin, since this was the city where I used to live. Therefore, I have some asumptions about the price and would like to see if I can verify or disprove them.
+With this project I would like to find out which places in the city are amongst the most expensive and why. In the past I rarely used Airbnb and also never in Berlin, since this was the city where I used to live. Therefore, I have some assumptions about the price and would like to see if I can verify or disprove them.
 
-Part of my motivation is also to gather insights about the guests staying in Berlin, be it which places in the city they prefer to stay in or how often they book an accommodation there. While actual booking data is not publicly available, only the reviews submitted by guests are. However, from my user experience I can tell that Airbnb highly encourages guests to submit a review after their stay, e. g. by sending multiple reminder e-mails. Therefore, I assume that the available review data are in a way representative for the actual booking behaviour of guests.
+Part of my motivation is also to gather insights about the guests staying in Berlin, be it which places in the city they prefer to stay in or how often they come to stay over night. While actual booking data is not publicly available, only the reviews submitted by guests are. However, from my user experience I can tell that Airbnb highly encourages guests to submit a review after their stay, e. g. by sending multiple reminder e-mails. Therefore, I assume that the available review data are in a way representative for the actual booking behaviour of guests.
 
-The dataset is quite vast, however it is not entirely comprehensive. Apparently the data provided only consist of accommodations that were bookable at runtime and reviews that have been submitted after a stay in these accommodations. Other data, that is also publicly available, such as accommodations that currently can not be booked as well as their reviews, are not included.
+The dataset is quite vast, however it is not entirely comprehensive. Apparently the data provided only consist of accommodations that were bookable at scrapetime and reviews that have been submitted after a stay in these accommodations. Other data, that is also publicly available, such as accommodations that currently can not be booked as well as their reviews, are not included.
+
+Before I start I will do all the necessary imports. For package and library management I use `renv`, therefore the project includes a `renv.lock` file. To install all the needed dependencies just run `renv::restore()`.
 
 ```{r}
 library(ggplot2)
@@ -41,16 +43,33 @@ library(ggrepel)
 library(forcats)
 ```
 
+The following lines will load the geoinformation about Berlin. Among the 140 neighbourhoods stored in the geojson file there are two geometry objects that do not belong to any neighbourhood. I will drop them using `drop_na`.
+
 ```{r}
 sf_use_s2(FALSE)
 neighbourhoods_url = "data/neighbourhoods-09-2022.geojson"
 berlin_neighbourhoods <- st_read(neighbourhoods_url) %>%
   drop_na(c("neighbourhood", "neighbourhood_group"))
 ```
+```{r}
+berlin_neighbourhoods %>%
+  ggplot() +
+  geom_sf()
+```
+The plot above is the map of Berlin, with the neighbourhoods as defined by Airbnb. It is worth to note that these neighbourhood definitions in many parts significantly deviate from the actual official neighbourhoods. However, the 16 `neighbourhood_groups` (not depicted) do refer to the actual districts of the city.
+
+The following will load all the listings.
 
 ```{r}
 listings_url <- "data/listings-09-2022.csv"
 listings_raw <-read_csv(listings_url)
+```
+
+Unfortunately, the price of a listing is stored as string value, e. g. `$1,100`. To be able to use it as number I make use of string replacing and cast it to a numerical value.
+
+The columns `neighbourhood` and `neighbourhood_group` are empty, all the values about the location of a listing are stored in the two columns `neighbourhood_cleansed` and `neighbourhood_group_cleansed`. To better access these information I will write them into the respective columns with the shorter name.
+
+```{r}
 listings_price_cleaned <- listings_raw %>%
   mutate(neighbourhood=neighbourhood_cleansed) %>%
   mutate(neighbourhood_group=neighbourhood_group_cleansed) %>%
@@ -60,14 +79,15 @@ listings_price_cleaned <- listings_raw %>%
   mutate(id = as.character(id))
 ```
 
-```{r}
-wrapper <- function(x, ...) 
-{
-  paste(strwrap(x, ...), collapse = "\n")
-}
-```
+## Which places are the most expensive and why?
 
-# Why are certain neighbourhoods outside the city center on average so expensive?
+As mentioned before, I am not entirely familiar with the market of Airbnb accommodations. I used it in the past a few times (at other places) but these occasions can be counted on the fingers of one hand. With my knowledge about Berlin I would assume that the most expensive neighbourhoods are the one in the city center. From the analysis as part of the "Programming for data science" project, for which I use the same data set, I know that this is where most of the guests stay, at least in terms of how many reviews are being submitted there. On the other hand the central districts are also the most expensive ones to live, in terms of housing costs (at least on the regular, non-touristical housing market).
+
+Airbnb uses to promote itself by praising the most exotic property types where guests can stay, such as tree houses or exclusive mountain chalets. Nonetheless, probably the majority of listings is rather conventional, such as residents subletting their flats or single rooms in their flats. Since Berlin is a big city I would assume that the rather expensive property types that can be found there are the ones which guests do not have to share with other people, where they are on their own. Of course also serviced apartments, which offer services comparable to a hotel, are likely to be more expensive than the average shared flat.
+
+Furthermore I am aware that there are also professional hosts who offer accommodations. By that I mean hosts who have multiple listings which they provide to guests. I assume that someone who has multiple listings active on Airbnb tends to demand higher prices because probably they invest more money and effort in hosting guests.
+
+I will start by defining a function which takes listings as parameters, groups them by their neighbourhood and aggregates a few information, such as the average price and the number of the listings that are offered there. 
 
 ```{r}
 summarise_listings_by_neighbourhood <- function(listings) {
@@ -76,9 +96,7 @@ summarise_listings_by_neighbourhood <- function(listings) {
     summarise(
       count_listings=n(),
       count_reviews=sum(number_of_reviews),
-      avg_price = mean(price), 
-      median_price = median(price),
-      avg_review_score = mean(review_scores_rating)
+      avg_price = mean(price)
     ) %>%
     inner_join(berlin_neighbourhoods, by= "neighbourhood") %>%
     st_as_sf()
@@ -86,6 +104,10 @@ summarise_listings_by_neighbourhood <- function(listings) {
 
 listings_grouped_by_neighbourhood_uncleaned <- summarise_listings_by_neighbourhood(listings_price_cleaned)
 ```
+
+I have now already used the function to process the listings that I had previously loaded and preprocessed. I appended `_uncleaned` to the variable name, I will show in a few moments why.
+
+First I use the now aggregated data to plot a map of the neighbourhoods with their computed average price.
 
 ```{r}
 listings_grouped_by_neighbourhood_uncleaned %>%
@@ -96,6 +118,9 @@ listings_grouped_by_neighbourhood_uncleaned %>%
   labs(fill = "Average price in $")
 ```
 
+Now this is really surprising. The two most expensive neighbourhoods seem to be located at the eastern city boundary. This was totally u
+nexpected, as this part of the city is otherwise not known for being highly desired by wealthy people. Before I continue I will store these two neighbourhoods in a variable so that I can use them for some comparison later.
+
 ```{r}
 neighbourhoods_top_2_expensive_uncleaned <- listings_grouped_by_neighbourhood_uncleaned %>%
   top_n(2, avg_price) %>%
@@ -104,7 +129,10 @@ neighbourhoods_top_2_expensive_uncleaned <- listings_grouped_by_neighbourhood_un
   pull()
 ```
 
+Now I will use a scatter plot to see how reliable these data are. Therefore, I will plot the average price against the number of listings. I will also add labels to the two most expensive neighbourhoods for better understanding.
+
 ```{r}
+count_neighbourhoods_uncleaned <- nrow(listings_grouped_by_neighbourhood_uncleaned)
 listings_grouped_by_neighbourhood_uncleaned %>%
   arrange(desc(avg_price)) %>%
   mutate(neighbourhood = ifelse(row_number() <= 2, neighbourhood, "")) %>%
@@ -113,8 +141,11 @@ listings_grouped_by_neighbourhood_uncleaned %>%
   geom_text_repel(aes(label = neighbourhood)) +
   ggtitle("Neighbourhoods by number of listings and average price (before cleaning)") +
   xlab("Number of listings") +
-  ylab("Average price in $")
+  ylab("Average price in $") +
+  labs(subtitle = paste("n =", count_neighbourhoods_uncleaned))
 ```
+
+I appears that the two most expensive neighbourhoods have very few listings offered. At this point I have not considered whether the listings that I have processed so far are actually interesting, in the sense that people actually book them. To find this out I will make use of the `number_of_reviews` column in the listings table which holds the information how many reviews had been submitted in the past for this listing. I will filter out those listings which do not have any reviews and then call the previously defined method again and also redraw the scatter plot.
 
 ```{r}
 listings_only_with_reviews <- listings_price_cleaned %>%
@@ -122,6 +153,7 @@ listings_only_with_reviews <- listings_price_cleaned %>%
 
 listings_grouped_by_neighbourhood_cleaned <- summarise_listings_by_neighbourhood(listings_only_with_reviews)
 
+count_neighbourhoods_cleaned <- nrow(listings_grouped_by_neighbourhood_cleaned)
 listings_grouped_by_neighbourhood_cleaned %>%
   arrange(desc(avg_price)) %>%
   mutate(neighbourhood = ifelse(neighbourhood %in% neighbourhoods_top_2_expensive_uncleaned, neighbourhood, "")) %>%
@@ -134,8 +166,11 @@ listings_grouped_by_neighbourhood_cleaned %>%
   ) +
   ggtitle("Neighbourhoods by number of listings and average price (after cleaning)") +
   xlab("Number of listings") +
-  ylab("Average price in $")
+  ylab("Average price in $") +
+  labs(subtitle = paste("n =", count_neighbourhoods_cleaned))
 ```
+
+Now the two neighbourhoods which previously were the two most expensive ones dropped significantly in the price ranking list. If I also now plot again the map of the neighbourhoods other interesting results are displayed.
 
 ```{r}
 listings_grouped_by_neighbourhood_cleaned %>%
@@ -146,6 +181,10 @@ listings_grouped_by_neighbourhood_cleaned %>%
   labs(fill = "Average price in $")
 ```
 
+First, apparently an entire neighbourhood is being disregarded. In the northeast there is now a grey spot, since this neighbourhood only held listings which did not have any reviews. Second, contrary to my assumption now the most expensive neighbourhoods are not the ones in the city center (although they apparently also have a high average price), but rather among them are two in the far west of the city and one southeast of the city center. Especially the ones in the western part raise my attention. What I know is that there is a lot of water because one of the two biggest rivers in the city, the Havel, flows there. Also the one in the southeast is by the riverside, of the river Spree in this case. Therefore I will now plot the most important water ways together with the most expensive neighbourhoods.
+
+I will start by loading the water data. I will not plot the entire geospatial data, that would clutter the map too much. Instead I will only show the biggest water ways.
+
 ```{r}
 rivers_waterways <- st_read("data/gis_osm_water_a_free_1.shp", layer = "gis_osm_water_a_free_1") %>%
   mutate(area = st_area(.)) %>%
@@ -153,10 +192,10 @@ rivers_waterways <- st_read("data/gis_osm_water_a_free_1.shp", layer = "gis_osm_
   
 top_n_area_waterways <- rivers_waterways %>%
   arrange(desc(area)) %>% 
-  head(364)
+  head(400)
 ```
 
-Waterways URL: https://download.geofabrik.de/europe/germany/berlin.html
+The geospatial data about the waterways originates from OpenStreetmap and was downloaded [here](https://download.geofabrik.de/europe/germany/berlin.html). Now I will combine the two maps. For better readability I will remove the neighbourhood boundaries and for better understanding of the following parts I will append labels to the neighbourhoods that belong to the top 5 most expensive ones but are not located in the city center.
 
 ```{r}
 listings_grouped_by_neighbourhood_cleaned %>%
@@ -165,8 +204,8 @@ listings_grouped_by_neighbourhood_cleaned %>%
   mutate(neighbourhood = ifelse(is_top_5 & neighbourhood_group %in% c("Lichtenberg", "Spandau"), neighbourhood, "")) %>%
   mutate(is_top_5 = factor(is_top_5, levels = c(TRUE, FALSE), labels = c("Top 5 mean price neighbourhoods", "Rest of neighbourhoods"))) %>%
   ggplot() + 
-  geom_sf(aes(fill = is_top_5), lwd = 0) +
-  geom_sf(data = top_n_area_waterways, color = alpha("blue",0.3)) +
+  geom_sf(aes(fill = is_top_5), color = alpha("white", 0), lwd = 0) +
+  geom_sf(data = top_n_area_waterways, color = alpha("blue",1)) +
   coord_sf(clip = "off") +
   geom_label_repel(
     aes(label = neighbourhood, geometry = geometry),
@@ -187,6 +226,10 @@ listings_grouped_by_neighbourhood_cleaned %>%
   ylab("")
 ```
 
+Here you do not only see rivers but also big lakes, like in the south east or the south west, through which the rivers flow. It becomes clear that all the three neighbourhoods are located by the waterside. So maybe that has something to do with the price. Next I will investigate the prevalent property types in the three neighbourhoods. For this purpose I will define some helper functions to categorize the different property types. For example there are two different names for boats ("Boat" and "Houseboat") and a lot more that describe a property which the guest will have on their own exclusively (such as "Entire home"). To achieve better comparability I will break the property types down into a few groups. If an accommodation fits into both categories, being serviced and also exclusive, it will be classified as serviced home since the additional service should be reflected in the price. 
+
+In the end I will create a scatterplot with the different categories as x axis and the price as y axis. Also I will highlight whether listings are run by hosts who also have other accommodations in the area or whether they are the only ones offered by their respective host.
+
 ```{r}
 boat_vector <- c("Boat", "Houseboat")
 
@@ -194,22 +237,6 @@ is_boat <- function(property_type) {
   property_type %in% boat_vector
 }
 
-get_plot_price_by_boat_or_other_property_type <- function(listings) {
-  listings %>%
-    mutate(is_boat = factor(is_boat(property_type), levels = c(TRUE, FALSE), labels = c("Boat", "Other property type"))) %>%
-    ggplot(aes(x = is_boat, y = price))
-}
-
-get_avg_price_for_neighbourhood <- function(neighbourhood_to_search) {
-  listings_grouped_by_neighbourhood_cleaned %>%
-  filter(neighbourhood == neighbourhood_to_search) %>%
-  st_drop_geometry() %>%
-  select(avg_price) %>%
-  pull()
-}
-```
-
-```{r}
 is_entire_home <- function(property_type) {
   contains_keyword_entire <- grepl(pattern = "Entire", x = property_type, fixed = TRUE)
   other_entire_homes_vector <- c("Tiny home", "Treehouse", "Castle", "Hut", "Island")
@@ -240,25 +267,31 @@ plot_price_per_property_category <- function(listings, neighbourhood, label_x_of
     pull()
   
   avg_price <- mean(listings$price)
+  count_of_listings <- nrow(listings)
   
   host_type_description <- "Belongs to host"
   title <- paste("Price of listings by property type in", neighbourhood)
   listings %>%
     mutate(property_category = get_property_category(property_type)) %>%
     mutate(multi_accommodation_host = host_id %in% host_ids_multiple_occurencies) %>%
-    mutate(host_id = ifelse(multi_accommodation_host, host_id, "Single-accommodation hosts")) %>%
+    mutate(host_id = ifelse(multi_accommodation_host, paste("Host ID:", host_id), "Single-accommodation hosts")) %>%
     ggplot(aes(x = property_category, y = price, color=host_id, shape=host_id)) +
     geom_quasirandom(alpha = .8, width = .2) +
     geom_hline(yintercept=avg_price, linetype="dashed") +
     annotate("text", x=label_x_offset, y=avg_price + label_y_offset, label="Mean price") +
     ggtitle(title) +
-    labs(color = host_type_description, shape = host_type_description) +
+    labs(color = host_type_description, 
+         shape = host_type_description,
+         subtitle = paste("n =", count_of_listings)) +
     xlab("Property type") +
     ylab("Price in $")
 }
 ```
 
-## Haselhorst
+
+### Haselhorst
+
+I will start by looking at the neighbourhood of Haselhorst.
 
 ```{r}
 haselhorst_name <- 'Haselhorst'
@@ -269,7 +302,13 @@ listings_haselhorst %>%
   plot_price_per_property_category(haselhorst_name, .7, 5)
 ```
 
-## Spandau Mitte
+In total there are 8 listings offered in the neighbourhood, of which are 5 boats which are all offered by the same host. Among the 3 remaining listings are 2 which are exclusively used by the guest(s) and one listing which does not fit into the aforementioned categories.
+
+The 5 boats cost by far more than the other listings. On the other hand there are not many listings in total offered in this neighbourhood, which is why these 5 boats are mainly responsible for the high mean price.
+
+### Spandau Mitte
+
+Next I will look at the other expensive neighbourhood at the western city boundary, which is Spandau Mitte.
 
 ```{r}
 spandau_mitte_name <- 'Spandau Mitte'
@@ -280,7 +319,11 @@ listings_spandau_mitte %>%
   plot_price_per_property_category(spandau_mitte_name, .8, 15)
 ```
 
-## Rummelsburger Bucht
+Unlike Haselhorst here is just one boat offered, which however is again more expensive than the mean price of the neighbourhood. In total there are 22 accomodations offered. On the other hand there is a significant similarity to Haselhorst. Also in Spandau Mitte there are 6 listings which are by far more expensive than the others in the neighbourhood. In this case these are serviced homes and they are also all offered by the same host. Although there are nearly three times as many listings offered as in Haselhorst, among them also several much cheaper accommodations, the serviced homes are also much more costy than the boats from Haselhorst which is why the mean price is very similar.
+
+### Rummelsburger Bucht
+
+Now with the experiences from the other two neighbourhoods I expect something similar to discover in Rummelsburger Bucht.
 
 ```{r}
 rummelsburger_bucht_name <- "Rummelsburger Bucht"
@@ -291,7 +334,13 @@ listings_rummelsburger_bucht %>%
   plot_price_per_property_category(rummelsburger_bucht_name, .7, 25)
 ```
 
-## Entire Berlin
+In this case there is no clear pattern as easily spottable as it was for the previously investigated neighbourhoods. While there are again a boats of which nearly all are more expensive than the mean neighbourhood price they are rather few. On the other hand there are 2 very expensive accommodations, a boat and an exclusive home which each cost about 1000\$ per night and therefore about double as much as the third most expensive listing in this neighbourhood. Unlike before in Rummelsburger Bucht there are no hosts who offer multiple accommodations in this neighbourhood.
+
+From what I now have discovered in these three neighbourhoods I would like to find out if these patterns are applicable to the entire city. Therefore I will use the previously defined and introduced categories to see to what extent this is the case.
+
+### Entire Berlin
+
+I will begin with comparing the median and quartiles for the aforementioned categories using a boxplot.
 
 ```{r}
 listings_only_with_reviews %>%
@@ -299,22 +348,31 @@ listings_only_with_reviews %>%
   ggplot(aes(x = property_category, y = price)) +
   geom_boxplot(outlier.shape = NA) +
   coord_cartesian(ylim = quantile(listings_only_with_reviews$price, c(0, .995))) +
-  ggtitle("Median prices by property categories in entire Berlin") +
+  ggtitle("Median and quartile prices by property categories in entire Berlin") +
   xlab("Listing property type") +
   ylab("Price in $")
 ```
 
+The first thing attracting attention is the high median price for boats and serviced homes with both being at about 250\$. Not only their medians but also their lower quartiles are significantly higher than the median or the upper quartile of the other two categories. In this comparison regular non-shared homes have a median of little less than 100\$ which is less than half of the two more expensive categories. The median of the fourth category on the other hand is even less than 50\$, so only about 20% the price of the serviced home median.
+
+However, this plot does not give any details about the actual distribution of the listings across these four categories. For this I will use a beeswarm plot.
+
 ```{r}
+count_of_all_cleaned_listings <- nrow(listings_only_with_reviews)
 listings_only_with_reviews %>%
   mutate(property_category = get_property_category(property_type)) %>%
-  group_by(property_category) %>%
-  summarise(count = n()) %>%
-  ggplot(aes(x = property_category, y = count)) +
-  geom_bar(stat='identity') +
-  ggtitle("Number of listings by property categories in entire Berlin") +
+  ggplot(aes(x = property_category, y = price)) +
+  geom_quasirandom(alpha=0.2, size=2) +
+  coord_cartesian(ylim = quantile(listings_only_with_reviews$price, c(0, .999))) +
+  ggtitle("Listing price distribution by property categories in entire Berlin") +
   xlab("Listing property type") +
-  ylab("Count")
+  ylab("Price in $") +
+  labs(subtitle = paste("n =", format(as.numeric(count_of_all_cleaned_listings), nsmall=0, big.mark=",")))
 ```
+
+While the biggest outcome of the previous plot was that Serviced homes and boats are the rather most expensive categories, the beeswarm plot shows that their relevance is rather insignificant, given that they are much less in quantity than the other two, seemingly cheaper categories, which applies especially to boats. On the other hand the group of the entire homes looks like it is certainly the one with the most listings and it includes a lot of members whose price is more than 200\$, with a high density being plotted up to even 500\$.
+
+Now that I covered the price distribution depending on the property type, I would also like to look at my assumption about hosts that offer one or multiple accommodations respectively.
 
 ```{r}
 host_ids_multiple_occurencies <- listings_only_with_reviews %>%
@@ -324,21 +382,33 @@ host_ids_multiple_occurencies <- listings_only_with_reviews %>%
   select("host_id") %>%
   pull()
 
+host_multi <- "Multi-accommodation host"
+host_single <- "Single-accommodation host"
 get_host_type <- function(host_id) {
-  ifelse(host_id %in% host_ids_multiple_occurencies, "Multi-accommodation host", "Single-accommodation host")
+  ifelse(host_id %in% host_ids_multiple_occurencies, host_multi, host_single)
 }
 
 listings_only_with_reviews %>%
   mutate(host_type = get_host_type(host_id)) %>%
+  mutate(host_type = factor(host_type, levels = c(host_single, host_multi))) %>%
   ggplot(aes(x = host_type, y = price)) +
-  geom_boxplot(outlier.shape = NA) +
+  geom_quasirandom(alpha=0.2, size=2) +
   coord_cartesian(ylim = quantile(listings_only_with_reviews$price, c(0, .99))) +
-  ggtitle("Median prices by host type in entire Berlin") +
+  ggtitle("Listing price distribution by host type in entire Berlin") +
   xlab("Host type") +
-  ylab("Price in $")
+  ylab("Price in $") +
+  labs(subtitle = paste("n =", format(as.numeric(count_of_all_cleaned_listings), nsmall=0, big.mark=",")))
 ```
 
-# If a guest submitted multiple reviews, what can we learn about their behavior?
+As can be seen there are significantly more single-accommodation hosts in Berlin, as the area less than 300\$ is basically just one black shape whereas the multi-accommodation host shape looks more like a cloud. The distribution of the latter indicates that listings offered by hosts that have multiple accommodations do cost more per night, having the broadest distribution between 50\$ and 100\$. Also the flattening of the shape when going up in the y axis direction does not happen as fast as for single-accommodation hosts, meaning that also a higher share of this category demands higher prices, e. g. between 100 and 400\$.
+
+Looking at the assumptions that I made in the beginning I come to the conclusion that they were partly right. While it is true that serviced apartments are more likely to be more expensive than other listing categories, in reality they do not play such a big role, at least in terms of how many of them are there, compared to entire homes that are let to guests. If they or also other rather expensive categories, such as boats, occur more frequently in small neighbourhoods that have a low number of total offered listings then this can lead to some kind of distortion. What is also true is that hosts offering multiple accommodations tend to demand higher prices. However it is worth to further investigate possible connections between the price and other features that have not been covered here. In its entirety the dataset contains much more information which might correlate with the price, e. g. the availability of certain amenities in an accommodation.
+
+# If a guest submitted multiple reviews, what can we learn about them?
+
+As stated in the introduction another interesting part of the Inside Airbnb dataset are the reviews. While they do not contain as many different information as the listings they might give a glimpse of other persons behavior, preferences or financial situation. Using the reviews dataset I will try to see if I can yield information like these.
+
+Before that I would like to get an overview about the dataset and to see how many people have actually submitted more than one review. Therefore I will first load the data from the csv file.
 
 ```{r}
 reviews_url <- "data/reviews-09-2022.csv"
@@ -346,11 +416,15 @@ reviews_raw <- read_csv(reviews_url) %>%
   mutate(listing_id = as.character(listing_id)) %>%
   mutate(id = as.character(id)) %>%
   mutate(reviewer_id = as.character(reviewer_id))
+```
 
+Now I will take these reviews data and scrape the actual single users out of it and assign them the count of reviews they have submitted. Based on these data I will then create two groups of users, those that have submitted only one review and those who have submitted multiple ones. The result of this aggregation will be plotted in a pie chart.
+
+```{r}
 reviewers <- reviews_raw %>%
   group_by(reviewer_id) %>%
   summarise(count_reviews = n())
-
+count_of_reviewers <- nrow(reviewers)
 reviewers %>%
   mutate(has_submitted_multiple_reviews = count_reviews > 1) %>%
   mutate(has_submitted_multiple_reviews = factor(has_submitted_multiple_reviews, 
@@ -364,9 +438,12 @@ reviewers %>%
   coord_polar("y", start=0) + 
   ggtitle("Share of users that have submitted one or multiple reviews") +
   xlab("") +
+  labs(subtitle = paste("n =", format(as.numeric(count_of_reviewers), nsmall=0, big.mark=","))) +
   scale_fill_discrete(name=NULL)+ 
   scale_y_continuous(name="", labels = scales::comma)
 ```
+
+Only a small portion of the users in the data set have ever written more than one review in Berlin. Now how exactly do they distribute across the number of submitted review? Therefore I will again make use of a beeswarm plot.
 
 ```{r}
 reviewers_with_multiple_reviews <- reviewers %>%
@@ -375,20 +452,20 @@ reviewers_with_multiple_reviews <- reviewers %>%
 reviewers_with_multiple_reviews %>%
   arrange(desc(count_reviews))
 
-max_reviews <- max(reviewers_with_multiple_reviews$count_reviews)
-bin_breaks <- c(5, 15, 20, 30, max_reviews)
-
+count_of_reviewers_multiple_reviews <- nrow(reviewers_with_multiple_reviews)
 reviewers_with_multiple_reviews %>%
-  filter(count_reviews > 5) %>%
-  mutate(count_reviews_bin = cut(count_reviews, breaks = bin_breaks)) %>%
-  group_by(count_reviews_bin) %>%
-  summarise(count_reviewers = n()) %>%
-  ggplot(aes(x = count_reviews_bin, y = count_reviewers)) +
-  geom_bar(stat='identity') +
-  ggtitle("Number of submitted reviews binned") +
-  xlab("Submitted reviews bin") +
-  ylab("Number of users")
+  mutate(category = "Users that have submitted multiple reviews") %>%
+  ggplot(aes(x = category, y = count_reviews)) +
+  geom_quasirandom(alpha=0.2, size=2) +
+  ggtitle("Distribution of users that have submitted multiple reviews") +
+  xlab("") +
+  ylab("Count of reviews") +
+  labs(subtitle = paste("n =", format(as.numeric(count_of_reviewers), nsmall=0, big.mark=",")))
 ```
+
+The wide all-black lines at the bottom indicate that by far the most of the more than 400,000 users have submitted just 2 or 3 reviews. Only a small portion has written more than 10.
+
+Now I would like to dive deeper into the details of individual users. I will focus on the 3 users who submitted most reviews.
 
 ```{r}
 reviewers_top_3 <- reviewers_with_multiple_reviews %>%
@@ -403,25 +480,35 @@ reviewers_top_3 %>%
   mutate(reviewer_id = factor(reviewer_id, levels = reviewers_top_3_ids_vector)) %>%
   ggplot(aes(x = reviewer_id, y = count_reviews)) +
   geom_bar(stat='identity') +
-  ggtitle("Number of reviews submitted by the top 3 users") +
+  ggtitle("Count of reviews submitted by the top 3 users") +
   xlab("User ID") +
-  ylab("Number of reviews")
+  ylab("Count of reviews")
 ```
+
+These are the three users with the most written reviews. 41, 33 and 30 each, 104 in total. First I would like to plot a time series about how their reviewing behavior developed over time.
+
 ```{r}
 reviewers_top_3_reviews <- reviewers_top_3 %>%
   inner_join(reviews_raw, by = "reviewer_id")
 reviewers_top_3_reviews %>%
-  mutate(year = year(date)) %>%
-  group_by(year, reviewer_id) %>%
-  summarise(count_reviews_per_year = n()) %>%
+  mutate(year_month = format(date,"%Y-%m")) %>%
+  group_by(year_month, reviewer_id) %>%
+  summarise(count_reviews_per_month = n()) %>%
+  mutate(year_month = ym(year_month)) %>%
   mutate(reviewer_id = factor(reviewer_id, levels = reviewers_top_3_ids_vector)) %>%
-  ggplot(aes(x=year, y=count_reviews_per_year, colour = reviewer_id)) +
-  geom_line() +
-  ggtitle("Number of reviews submitted by the top 3 users per year") +
-  xlab("Year") +
+  ggplot(aes(x=year_month, y=count_reviews_per_month, fill = reviewer_id)) +
+  geom_bar(position="stack", stat="identity", color = "black") + 
+  scale_fill_viridis_d(option = "magma") +
+  scale_x_date(date_labels="%Y-%m", date_breaks  ="1 year") +
+  ggtitle("Number of reviews submitted by the top 3 users per month") +
+  xlab("Date") +
   ylab("Number of reviews") +
-  labs(color = "Reviewer ID", subtitle = "(as of September 2022)")
+  labs(fill = "Reviewer ID", subtitle = "(as of September 2022)")
 ```
+
+User 47369497 has stayed the most times in Berlin Airbnbs in the years 2016 and 2019. After the outbreak of Covid they stayed there only 3 times. While user 119795263 distributes kind of equally over 2017-2019 they had a peak in stays in 2021. The first proof of user 107428449 appeared in the beginning of 2021, since then the output of reviews was quite constant with almost always 1-2 submissions per month.
+
+After the look in the calendar it would be interesting to see whether they travelled alone or together with someone else. While this information is not apparent from the quantitative data (it might be comprehensible if a user e. g. writes in the comment something like "We had a pleasant stay" and discloses these information this way), it can be guessed by analysing the listings which the reviews refer to, in detail the content of the `accommodates` field. This field has a number which expresses how many people can stay at the place at once.
 
 ```{r}
 reviewers_top_3_reviews_listings <- reviewers_top_3_reviews %>%
@@ -438,6 +525,9 @@ reviewers_top_3_reviews_listings %>%
   ylab("Number of reviews")
 ```
 
+User 47369497 mainly prefers accommodations where one or two people can sleep. User 119795263 mostly stays at places where 2 people can be accommodated and User 107428449 always books listings where up to 4 people can stay. Maybe this is because they use to travel with a partner and/or child or maybe with friends. I can not tell for sure but this is an interesting aspect.
+
+Next I would like to have a look on the financial side. How much many do these 3 users usually pay for their accommodation? Therefore I will use binning to easier compare the actual values.
 ```{r}
 reviewers_top_3_reviews_listings %>%
   mutate(price_bin = cut(price, breaks = c(0, 25, 50, 75, 100, 125, 150, Inf))) %>%
@@ -448,10 +538,15 @@ reviewers_top_3_reviews_listings %>%
   geom_bar(stat = "identity") +
   facet_wrap(vars(reviewer_id)) +
   ggtitle("Price bins") +
-  xlab("Price bins") +
+  xlab("Price bins in $") +
   ylab("Number of reviews") +
   theme(axis.text.x = element_text(angle = 45, vjust = 1, hjust=1))
 ```
+Also here an interesting disbalance becomes apparent. While users 47369497 and 119795263 mostly stay at cheaper places, mostplay spending not more than 75 or even just 50\$ per night, user 107428449 nearly always picks accommodations that cost between 100 and 125\$. I did not expect this, since with that much money one could probably also get a decent hotel room, where you usually do not have to worry about your room being clean or your host being on time and/or nice to you.
+
+Unfortunately the data do not give any information about how long somebody stayed at a certain place. Every stay could be just one night or maybe more than 1 or 2 weeks. Without these information I can not tell for sure how much a user has spent in total for a stay.
+
+Finally I would like to see which neighbourhoods the 3 users prefer to stay in. Therefore I will define a helpful function which plots the visited neighbourhoods and how often a user has stayed in a neighbourhood.
 ```{r}
 get_plot_map_count_reviews_per_neighbourhood <- function(user_reviews_listings) {
   user_id <- user_reviews_listings %>%
@@ -470,11 +565,15 @@ get_plot_map_count_reviews_per_neighbourhood <- function(user_reviews_listings) 
 }
 ```
 
+Now I will call the previously defined function for the first user.
+
 ```{r}
 reviewers_top_3_reviews_listings %>%
   filter(reviewer_id == reviewer_top_3_ids[1]) %>%
   get_plot_map_count_reviews_per_neighbourhood()
 ```
+
+User 47369497 has a clear preference towards the area around the "Kurfürstendamm" in the western city center, a fancy shopping street with a lot of expensive stores. I am quite surprised by this given the fact that in the first part of the project I found out that this is one of the on average top 5 most expensive neighbourhoods in the city, while user 47369497, as discovered just before, uses to not spend more than 75\$ for an accommodation.
 
 ```{r}
 reviewers_top_3_reviews_listings %>%
@@ -482,28 +581,45 @@ reviewers_top_3_reviews_listings %>%
   get_plot_map_count_reviews_per_neighbourhood()
 ```
 
+User 119795263 also has a clear preference about where to sleep in the city. While also having at least once stayed at neighbourhoods south of the city center or in the south east, most of the times they booked an accommodation in the northern city center, with multiple adjacent neighbourhoods.
+
 ```{r}
 reviewers_top_3_reviews_listings %>%
   filter(reviewer_id == reviewer_top_3_ids[3]) %>%
   get_plot_map_count_reviews_per_neighbourhood()
 ```
 
+Now this is interesting. User 107428449, having stayed in Berlin for 30 times, nearly always chose the same neighbourhood in the southeastern city center. 
+
 ```{r}
 reviewers_top_3_reviews_listings %>%
   filter(reviewer_id == reviewer_top_3_ids[3]) %>%
-  mutate(month = month(date)) %>%
-  mutate(year = year(date)) %>%
-  mutate(year_month = format(date,"%Y-%m")) %>%
-  group_by(year_month, listing_id) %>%
+  group_by(listing_id, host_id) %>%
   summarise(count = n()) %>%
-  mutate(year_month = ym(year_month)) %>%
-  ggplot(aes(x = year_month, y = count, fill=listing_id)) + 
-  geom_bar(position="stack", stat="identity") + 
-  scale_fill_viridis_d() +
-  scale_x_date(date_labels="%Y-%m", date_breaks  ="1 month") +
-  xlab("Month") + 
+  ggplot(aes(x = listing_id, y = count, fill=host_id)) + 
+  geom_bar(stat="identity") + 
+  scale_fill_viridis_d(option = "magma") +
+  xlab("Listing ID") + 
   ylab("Number of reviews") +
-  labs(fill = "Listing ID") +
-  ggtitle(paste("Number of reviews per listing over time from user", reviewer_top_3_ids[3])) +
-  theme(axis.text.x = element_text(angle = 45, vjust = 1, hjust=1))
+  labs(fill = "Host ID") +
+  ggtitle(paste("Number of reviews per listing from user", reviewer_top_3_ids[3]))
 ```
+
+Even more interesting: The user nearly always chooses the same host, but different accommodations. This seems a bit suspicious to me. Why would someone book 5 different accommodations from the same host 29 times within a bit more than one year, more or less constantly between one and three times per month? Either the user and the host have some kind of personal relationship or this is review fraud.
+
+As a quick plausibility check I will compare the distribution of the comments of the top 3 users regarding the length of the comment.
+
+```{r}
+reviewers_top_3_reviews_listings %>%
+  mutate(comment_length = nchar(comments)) %>%
+  mutate(reviewer_id = factor(reviewer_id, levels = reviewers_top_3_ids_vector)) %>%
+  ggplot(aes(x = reviewer_id, y = comment_length)) +
+  geom_quasirandom(alpha=0.4, size=2) +
+  ggtitle("Distribution of review comment length") +
+  xlab("User ID") +
+  ylab("Review comment length in characters")
+```
+
+As can be seen user 107428449 has a totally different pattern than the other two users, writing far more shorter reviews after their stay. This is no evidence but still it looks odd. Therefore I think it might be possible that this is review fraud.
+
+With this exploration I would like to come to an end. As shown these publicly available data hold some secrets. It would be a great opportunity to apply more sophisticated NLP mechaniques in order to gain further insights, e. g. by using clustering to find similarities among comments and then maybe correlations to listing features. 
